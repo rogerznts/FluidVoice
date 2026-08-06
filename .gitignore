@@ -199,8 +199,12 @@ RELEASE_NOTES_*
 
 **.dmg
 **.dmg.zip
-# Documentation backups (for future reference, not needed in repo)
-docs/
+# NOTE: upstream (altic-dev) ignores `docs/` entirely. This fork versions it:
+# docs/ holds the MOSK spec artifacts, which are the source of truth for
+# planned work rather than throwaway documentation backups.
+
+# Local agent toolkit — not part of the product
+.claude/
 
 
 .agent/
