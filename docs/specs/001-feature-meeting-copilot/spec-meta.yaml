@@ -1,0 +1,9 @@
+spec_number: "001"
+spec_id: "001-feature-meeting-copilot"
+type: "feature"
+branch: "feature/001-meeting-copilot"
+created_at: "2026-08-06T18:19:09Z"
+created_by: "Roger <phpsaux@gmail.com>"
+status: active
+current_phase: tasks
+last_phase_change: "2026-08-06T18:30:00Z"

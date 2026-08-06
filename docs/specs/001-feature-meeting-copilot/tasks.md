@@ -1,0 +1,174 @@
+---
+description: "Tarefas de implementação — Meeting Copilot"
+---
+
+# Tasks: Meeting Copilot
+
+**Input**: `docs/specs/001-feature-meeting-copilot/` (spec.md, plan.md)
+**Branch**: `feature/001-meeting-copilot`
+
+## Formato: `[ID] [P?] [Story] Descrição`
+
+- **[P]** — pode rodar em paralelo (arquivos distintos, sem dependência)
+- **[Story]** — user story da spec (US1–US5) ou `FND` para fundação
+- Caminhos de arquivo são exatos e relativos à raiz do repositório
+
+## Convenções
+
+- Serviços novos: `Sources/Fluid/Services/Meeting/Copilot/`
+- UI nova: `Sources/Fluid/UI/Meeting/Copilot/`
+- Testes: `Tests/FluidDictationIntegrationTests/Copilot/`
+- Antes de qualquer commit: SwiftFormat + SwiftLint estrito (`TEST-REPO-001`)
+- Build de verificação neste ambiente: `./build.sh unsigned`
+
+---
+
+## Fase 1: Fundação (bloqueante)
+
+**Objetivo**: modelos, persistência e perfis. Nada de US1–US5 pode começar antes desta fase fechar.
+
+- [ ] **T001** [FND] Criar `Sources/Fluid/Services/Meeting/Copilot/CopilotModels.swift` com `CopilotInsight`, `CopilotChatMessage`, `CopilotNote`, `CopilotBriefing` e `CopilotSessionArtifacts`. Todos `Codable`, `Sendable`, `Identifiable`, com `schemaVersion`. Insights ancoram em `MeetingMediaTime`, **não** em `MeetingTranscriptSegmentID` (AD-002).
+- [ ] **T002** [FND] Criar `Sources/Fluid/Persistence/MeetingCopilotProfileStore.swift` com `MeetingCopilotProfile` (id, nome, prompt de insight, prompt de briefing, `insightFormat`, variantes pt/en). Tipo próprio, **não** estender `SettingsStore.PromptMode` (AD-003).
+- [ ] **T003** [P] [FND] Semear cinco perfis embarcados em pt-BR e en — entrevista técnica, entrevista de emprego, vendas, aula, reunião interna — todos editáveis e duplicáveis (`FR-015`, `FR-034`).
+- [ ] **T004** [FND] Estender `Sources/Fluid/Services/Meeting/MeetingSessionStore.swift` para persistir `CopilotSessionArtifacts` junto da sessão, com escrita atômica e migração de schema. Não usar `UserDefaults` (`CODE-006`).
+- [ ] **T005** [FND] Adicionar `transcriptMode` (`.offlineAfterStop` | `.live`) e `copilotProviderChoice` a `MeetingSession` em `MeetingModels.swift`, incrementando `currentSchemaVersion` com migração do valor anterior (`LIVE-001`, AD-005).
+- [ ] **T006** [P] [FND] Adicionar preferências do copiloto ao `SettingsStore.swift`: posição do painel (acima/abaixo), estado de colapso, perfil padrão, modo de insight (automático/manual).
+- [ ] **T007** [P] [FND] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotArtifactPersistenceTests.swift` — round-trip, migração de schema e sobrevivência a relaunch (`SC-006`).
+
+**Checkpoint F1**: artefatos gravam e recarregam; perfis embarcados aparecem; `./build.sh unsigned` passa.
+
+---
+
+## Fase 2: Transcrição ao vivo (bloqueante para US1)
+
+**Objetivo**: texto provisório durante a gravação, sem tocar na durabilidade da captura.
+
+- [ ] **T008** [FND] Expor um consumidor opcional de buffers em `MeetingCaptureEngine.swift`: cópia downsampled entregue por stream limitado com **descarte** sob pressão. Callbacks de captura permanecem mínimos (`CAP-012`, AD-001, R-02).
+- [ ] **T009** [FND] Criar `Copilot/LiveTranscriptionTap.swift` consumindo esse stream e alimentando ASR streaming multilíngue (pt/en) conforme o `languageCode` da sessão (`FR-000`, `DEC-COP-001`).
+- [ ] **T010** [FND] Emitir segmentos com `status = .provisional` no array `segments` da sessão, com IDs estáveis e `revision` incremental (`LIVE-002`).
+- [ ] **T011** [FND] Serializar o acesso ao provider de ASR entre caminho ao vivo e pipeline offline; o vivo cede prioridade ao durável (`PIPE-006`, `PIPE-015`, R-01).
+- [ ] **T012** [FND] Implementar reconciliação pós-Stop em `MeetingProcessingPipeline.swift`: segmentos finais substituem provisórios **preservando correções manuais** do usuário (`LIVE-007`, `LIVE-008`, R-03).
+- [ ] **T013** [P] [FND] Criar `Tests/FluidDictationIntegrationTests/Copilot/LiveTranscriptReconciliationTests.swift` cobrindo substituição, preservação de correção e ancoragem temporal de insights.
+- [ ] **T014** [FND] Teste de carga: sessão longa com consumidor ao vivo artificialmente lento, provando que nenhum chunk finalizado é perdido (`CAP-018`, R-02).
+
+**Checkpoint F2**: texto provisório aparece durante a gravação e é substituído corretamente após o Stop; captura permanece íntegra sob estresse.
+
+---
+
+## Fase 3: Motor de insights — US1 (P1)
+
+**Objetivo**: cartões de insight guiados pelo perfil ativo.
+
+- [ ] **T015** [US1] Criar `Copilot/CopilotContextWindow.swift`: janela deslizante com teto de tokens mais resumo acumulado para reuniões longas (`FR-011`, R-04).
+- [ ] **T016** [US1] Criar `Copilot/CopilotPromptBuilder.swift` montando o prompt a partir do perfil, do `insightFormat` (`FR-033`), do idioma da sessão e da janela de contexto.
+- [ ] **T017** [US1] Criar `Copilot/CopilotInsightEngine.swift`: gatilho por fim de turno de fala, supressão de disparos redundantes, throttle e cancelamento de requisições obsoletas (`FR-009`, `FR-011`).
+- [ ] **T018** [US1] Integrar com `LLMClient` usando streaming; nenhuma chamada quando não há fala relevante (`FR-009`).
+- [ ] **T019** [US1] Criar `Copilot/MeetingCopilotService.swift` como orquestrador por sessão, criado e destruído pelo `MeetingSessionCoordinator` (AD-004).
+- [ ] **T020** [US1] Instanciar o serviço no `MeetingSessionCoordinator.swift`, amarrado ao ciclo de vida da sessão e sobrevivendo ao fechamento da janela (`FR-032`).
+- [ ] **T021** [US1] Tratar falha de provider como erro isolado no cartão, jamais como falha de sessão (`FR-012`, `SC-005`).
+- [ ] **T022** [P] [US1] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotInsightTriggerTests.swift` e `CopilotContextWindowTests.swift` — disparo, silêncio, sobreposição, teto de janela.
+- [ ] **T023** [P] [US1] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotPromptBuilderTests.swift` — variação por perfil, formato e idioma.
+
+**Checkpoint F3**: insights coerentes com o perfil, dentro de `SC-001`, com falha de IA isolada.
+
+---
+
+## Fase 4: Painel — US1 (P1)
+
+**Objetivo**: a superfície visível. Pode começar em paralelo à F3 com dados simulados.
+
+- [ ] **T024** [US1] Criar `UI/Meeting/Copilot/CopilotPanelView.swift`: container com posição acima/abaixo persistida e colapso sem afetar a gravação (`FR-005`, `FR-006`).
+- [ ] **T025** [US1] Criar `UI/Meeting/Copilot/CopilotStreamView.swift`: fluxo cronológico **virtualizado** — nunca uma árvore SwiftUI monolítica (`FR-008`, `PERF-004`, R-07).
+- [ ] **T026** [US1] Criar `UI/Meeting/Copilot/CopilotInsightCard.swift` seguindo as telas de referência: contexto detectado, citação do interlocutor, corpo do insight. Reusar tema e componentes existentes (`A11Y-009`).
+- [ ] **T027** [US1] Criar `UI/Meeting/Copilot/CopilotProfilePicker.swift`; troca de perfil afeta só insights seguintes e preserva a marcação dos anteriores (`FR-010`).
+- [ ] **T028** [US1] Hospedar o painel em `UI/MeetingTranscriptionView.swift` sem quebrar os estados de canvas existentes (setup, gravação, processamento, resultado, interrompido).
+- [ ] **T029** [US1] Distinguir visualmente texto provisório de final (`FR-004`).
+- [ ] **T030** [P] [US1] Acessibilidade do painel: navegação completa por teclado, ordem lógica de VoiceOver, sem depender de cor isolada (`A11Y-001`, `A11Y-003`, `A11Y-004`).
+
+**Checkpoint F4**: US1 completa e demonstrável de ponta a ponta.
+
+---
+
+## Fase 5: Ações rápidas e chat — US2 (P1) e US3 (P2)
+
+- [ ] **T031** [US2] Criar `UI/Meeting/Copilot/CopilotActionBar.swift` com **Esclarecer**, **Recapitular** e **Pesquisar**.
+- [ ] **T032** [US2] Implementar as três ações no `CopilotInsightEngine`, cada uma com sua semântica de prompt sobre a janela de contexto.
+- [ ] **T033** [US2] **Pesquisar** declara explicitamente que responde a partir do conhecimento do modelo e não consultou fontes externas (`FR-013`, A-04).
+- [ ] **T034** [US2] Respostas de ação entram no mesmo fluxo cronológico dos insights automáticos, identificadas por origem (`FR-007`).
+- [ ] **T035** [US3] Criar `Copilot/CopilotChatService.swift` mantendo o fio da conversa e citando a transcrição acumulada.
+- [ ] **T036** [US3] Criar `UI/Meeting/Copilot/CopilotChatInput.swift`; novos segmentos de transcrição **não** podem apagar o texto em digitação nem roubar o foco (`FR-007`, edge case).
+- [ ] **T037** [US3] Permitir chat sobre sessões já encerradas, a partir da transcrição final (`US3` cenário 4).
+
+**Checkpoint F5**: US2 e US3 completas, dentro de `SC-002`.
+
+---
+
+## Fase 6: Notas e briefing — US4 (P2) e US5 (P2)
+
+- [ ] **T038** [US4] Criar `Copilot/CopilotNoteExtractor.swift` acumulando decisões, pendências e perguntas em aberto, ancoradas a timestamps (`FR-018`).
+- [ ] **T039** [US4] Exibir notas na sessão salva e garantir que a exclusão do áudio as preserve (`FR-020`).
+- [ ] **T040** [US4] Estender o painel de histórico herdado do `meeting-m1` para mostrar transcrição, insights, chat, notas e briefings juntos (`US4` cenário 2).
+- [ ] **T041** [US4] Exclusão da reunião remove todos os artefatos de copiloto associados (`FR-021`).
+- [ ] **T042** [US5] Criar `Copilot/CopilotBriefingService.swift` gerando sobre a transcrição **autoritativa**, com aviso explícito quando a base for provisória (`FR-022`).
+- [ ] **T043** [US5] Criar `UI/Meeting/Copilot/CopilotBriefingView.swift` com seletor de perfil de briefing e geração sob demanda.
+- [ ] **T044** [US5] Permitir múltiplos briefings coexistindo por sessão, identificados por perfil e horário (`FR-023`).
+- [ ] **T045** [US5] Exportação omitindo embeddings, fingerprints de modelo e vetores de confiança (`FR-024`, `UX-RESULT-010`).
+
+**Checkpoint F6**: US4 e US5 completas; `SC-008` verificado.
+
+---
+
+## Fase 7: Privacidade, robustez e prova
+
+- [ ] **T046** Implementar seleção de provedor por sessão, fixada antes do Start, com padrão **local** (`FR-025`, AD-005).
+- [ ] **T047** Implementar opt-in explícito para provedor em nuvem, com aviso claro de que a fala de terceiros sai da máquina (`FR-026`).
+- [ ] **T048** Exibir indicador persistente do destino dos dados enquanto a nuvem estiver ativa (`FR-027`).
+- [ ] **T049** Auditar analytics, logs e diagnósticos: nenhum conteúdo de reunião pode aparecer (`FR-028`, `SC-007`, `TEST-PRIV-001`, R-06).
+- [ ] **T050** Verificação de capacidade do modelo local antes do Start, com aviso honesto em vez de falha cartão a cartão (R-08).
+- [ ] **T051** Degradação em Intel: insights sobre transcrição sem rótulo de locutor, com a limitação declarada na interface (`DEC-009`).
+- [ ] **T052** Medir a latência do primeiro PCM do ditado contra a baseline atual e provar impacto zero (`FR-030`, `SC-004`).
+- [ ] **T053** Matriz de falhas: provider fora do ar, chave inválida, timeout, cancelamento no Stop, encerramento forçado durante insight em voo (`SC-005`).
+- [ ] **T054** Sessão de 60 minutos com memória limitada e sem perda de segmentos finalizados (`SC-003`).
+- [ ] **T055** SwiftFormat e SwiftLint estrito em toda a superfície nova (`TEST-REPO-001`).
+- [ ] **T056** Validação no app instalado, em reunião real, em pt-BR e en (`TEST-REPO-003`).
+
+**Checkpoint F7**: `SC-001` a `SC-008` verificados; feature pronta para gate de QA.
+
+---
+
+## Dependências
+
+```text
+F1 (T001–T007) ──┬──> F2 (T008–T014) ──> F3 (T015–T023) ──> F5 (T031–T037)
+                 │                            │
+                 │                            └──> F4 (T024–T030)
+                 └──────────────────────────> F6 (T038–T045)
+                                                   │
+                                          F7 (T046–T056) <── todas
+```
+
+- **F1 e F2 são bloqueantes.** Nenhuma user story fecha sem elas.
+- **F4 pode começar em paralelo a F3** usando dados simulados, mas só fecha depois de T019.
+- **F6 depende de F1** para persistência, mas não de F3 — o briefing opera sobre a transcrição final, que já existe na base herdada.
+- **F7 fecha por último**, pois valida o conjunto.
+
+## Paralelismo
+
+Marcadas com **[P]** e seguras para execução simultânea: T003, T006, T007, T013, T022, T023, T030.
+
+## Contagem
+
+56 tarefas — 14 de fundação, 16 de US1, 7 de US2/US3, 8 de US4/US5, 11 de robustez.
+
+---
+
+## Regras de parada
+
+Pare e escale antes de prosseguir se qualquer tarefa exigir:
+
+- quebrar a durabilidade da captura ou a recuperabilidade de chunks finalizados
+- unir os domínios de falha de captura e processamento
+- mover sessões de reunião para `UserDefaults`
+- alterar o contrato do `AudioActivityArbiter` entre ditado e reunião
+- tornar IDs de segmento instáveis sob renomeação de locutor
+- adicionar latência ao caminho de ditado
