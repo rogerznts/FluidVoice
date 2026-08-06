@@ -1707,11 +1707,7 @@ private struct MeetingResultCanvas: View {
                     )
                     .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
-                    // DIAGNOSTIC EXPERIMENT — not the final shape. LazyVStack is
-                    // what PERF-004 wants for hour-long transcripts; this swap
-                    // only isolates whether lazy materialisation is what makes
-                    // the scroll oscillate under hover.
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                    LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                         ForEach(self.session.transcriptSegments) { segment in
                             MeetingTranscriptSegmentRow(
                                 segment: segment,
@@ -2029,6 +2025,14 @@ private struct MeetingTranscriptSegmentRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Settle the row's height in its first measurement pass.
+        //
+        // LazyVStack sizes the scroll content from rows it has not built yet,
+        // so a row whose height changes after materialisation shifts the total
+        // and makes the scroll jump. `.textSelection` re-measuring under the
+        // cursor was enough to start that cycle: the jump moved the pointer to
+        // a different row, which re-measured, which jumped again.
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(Self.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"

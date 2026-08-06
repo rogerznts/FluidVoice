@@ -130,7 +130,23 @@ Não entregue nesta fase: nada. T008–T014 completos no código; a validação 
 - [ ] **T029** [US1] Distinguir visualmente texto provisório de final (`FR-004`).
 - [ ] **T030** [P] [US1] Acessibilidade do painel: navegação completa por teclado, ordem lógica de VoiceOver, sem depender de cor isolada (`A11Y-001`, `A11Y-003`, `A11Y-004`).
 
-- [ ] **T030b** [US1] **Dívida herdada — restaurar virtualização do transcript.** A correção do travamento (ver "Correção de bug herdado", abaixo) trocou `LazyVStack` por `VStack` em `MeetingResultCanvas`, removendo a virtualização. Funciona para transcrições curtas e falha numa reunião longa. Restaurar `LazyVStack` com altura de linha estável, atendendo `PERF-004` e `FR-008`. **Bloqueia T025**, que constrói o fluxo virtualizado do copiloto sobre o mesmo padrão.
+- [x] **T030b** [US1] **Dívida herdada — restaurar virtualização do transcript.** A correção do travamento (ver "Correção de bug herdado", abaixo) trocou `LazyVStack` por `VStack` em `MeetingResultCanvas`, removendo a virtualização. Restaurar `LazyVStack` com altura de linha estável, atendendo `PERF-004` e `FR-008`. **Bloqueia T025**, que constrói o fluxo virtualizado do copiloto sobre o mesmo padrão.
+
+  **Medido em 2026-08-06, não estimado:**
+
+  | Segmentos | Duração equivalente | Comportamento |
+  | --- | --- | --- |
+  | 3 | 35 s | instantâneo |
+  | 135 | 12m55s | abre bem, rolagem fluida |
+  | 1200 | ~1h45 | **lento, engasga na rolagem**, sem travar |
+
+  Taxa observada: ~10,4 segmentos por minuto de reunião. Uma reunião de 1 hora fica em ~625 segmentos, dentro da faixa onde a degradação já aparece. O fixture de stress usado no teste pode ser recriado clonando uma sessão e multiplicando `transcriptSegments`.
+
+  **Resolvido em 2026-08-06.** `LazyVStack` restaurado e `.fixedSize(horizontal: false, vertical: true)` aplicado à linha inteira, não apenas ao `Text` interno.
+
+  Mecanismo: o `LazyVStack` dimensiona o conteúdo do scroll a partir de linhas que ainda não construiu. Uma linha cuja altura muda depois de materializada desloca o total, e o scroll salta — o salto move o ponteiro para outra linha, que remede, que salta de novo. `.textSelection` remedindo sob o cursor bastava para iniciar o ciclo. Fixar a altura na primeira medição encerra a realimentação.
+
+  Verificado à mão contra os três fixtures (3, 135 e 1200 segmentos): abertura rápida, rolagem fluida e scroll imóvel com o mouse parado sobre o texto.
 
 **Checkpoint F4**: US1 completa e demonstrável de ponta a ponta.
 
