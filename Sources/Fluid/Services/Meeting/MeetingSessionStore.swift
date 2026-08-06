@@ -9,7 +9,7 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
 }
 
-private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
+final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
     let manager: FileManager
 
     init(manager: FileManager) {
@@ -28,10 +28,10 @@ actor MeetingSessionStore: MeetingSessionStoring {
         var updatedAt: Date
     }
 
-    private let fileSystem: MeetingSessionFileSystem
+    let fileSystem: MeetingSessionFileSystem
     private let rootDirectory: URL
-    private let encoder: JSONEncoder
-    private let decoder: JSONDecoder
+    let encoder: JSONEncoder
+    let decoder: JSONDecoder
 
     init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
         self.fileSystem = MeetingSessionFileSystem(manager: fileManager)
@@ -216,7 +216,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         return reconciled
     }
 
-    private func prepareRootDirectory() throws {
+    func prepareRootDirectory() throws {
         if !self.fileSystem.manager.fileExists(atPath: self.rootDirectory.path) {
             try self.createPrivateDirectory(self.rootDirectory)
         }
@@ -234,7 +234,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         )
     }
 
-    private func atomicPrivateWrite(_ data: Data, to destination: URL) throws {
+    func atomicPrivateWrite(_ data: Data, to destination: URL) throws {
         try data.write(to: destination, options: .atomic)
         try self.fileSystem.manager.setAttributes(
             [.posixPermissions: NSNumber(value: Int16(0o600))],
@@ -286,7 +286,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         }
     }
 
-    private func sessionDirectoryURL(for id: MeetingSessionID) -> URL {
+    func sessionDirectoryURL(for id: MeetingSessionID) -> URL {
         self.rootDirectory.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 

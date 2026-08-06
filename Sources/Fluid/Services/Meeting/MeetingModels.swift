@@ -382,13 +382,31 @@ nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
     var retainAudioUntil: Date?
 }
 
+/// How a session produces its transcript.
+///
+/// The seam `LIVE-001` asked for: `.offlineAfterStop` is the inherited
+/// behavior, `.live` adds provisional segments during capture without changing
+/// how the durable path works.
+nonisolated enum MeetingTranscriptMode: String, Codable, CaseIterable, Sendable {
+    case offlineAfterStop
+    case live
+}
+
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    /// v2 adds `transcriptMode` and `copilotProviderChoice`. Sessions written by
+    /// v1 decode with the inherited defaults, so no data is lost.
+    static let currentSchemaVersion = 2
+
+    /// Languages the meeting pipeline accepts (`DEC-COP-001`). This fork
+    /// revokes upstream `DEC-001`, which pinned meetings to English.
+    static let supportedLanguageCodes: Set<String> = ["en", "pt"]
 
     var schemaVersion: Int
     var id: MeetingSessionID
     var title: String
     var languageCode: String
+    var transcriptMode: MeetingTranscriptMode
+    var copilotProviderChoice: CopilotProviderChoice
     var mode: MeetingCaptureMode
     var platform: MeetingPlatformProfile?
     var capturedApplication: MeetingApplicationIdentity?
@@ -410,12 +428,16 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         id: MeetingSessionID = UUID(),
         configuration: MeetingCaptureConfiguration,
         startedAt: Date = Date(),
-        timebase: MeetingTimebaseMetadata
+        timebase: MeetingTimebaseMetadata,
+        transcriptMode: MeetingTranscriptMode = .offlineAfterStop,
+        copilotProviderChoice: CopilotProviderChoice = .local
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.id = id
         self.title = configuration.title
         self.languageCode = configuration.languageCode
+        self.transcriptMode = transcriptMode
+        self.copilotProviderChoice = copilotProviderChoice
         self.mode = configuration.mode
         self.platform = configuration.platform
         self.capturedApplication = configuration.application
@@ -451,13 +473,65 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = Date()
     }
 
+    /// Custom decoding exists solely to migrate v1 sessions: the two copilot
+    /// fields are absent there, and the synthesized initializer would fail the
+    /// whole decode rather than fall back.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        self.id = try container.decode(MeetingSessionID.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.languageCode = try container.decode(String.self, forKey: .languageCode)
+        self.transcriptMode = try container.decodeIfPresent(
+            MeetingTranscriptMode.self,
+            forKey: .transcriptMode
+        ) ?? .offlineAfterStop
+        self.copilotProviderChoice = try container.decodeIfPresent(
+            CopilotProviderChoice.self,
+            forKey: .copilotProviderChoice
+        ) ?? .local
+        self.mode = try container.decode(MeetingCaptureMode.self, forKey: .mode)
+        self.platform = try container.decodeIfPresent(MeetingPlatformProfile.self, forKey: .platform)
+        self.capturedApplication = try container.decodeIfPresent(
+            MeetingApplicationIdentity.self,
+            forKey: .capturedApplication
+        )
+        self.selectedMicrophone = try container.decode(
+            MeetingMicrophoneIdentity.self,
+            forKey: .selectedMicrophone
+        )
+        self.startedAt = try container.decode(Date.self, forKey: .startedAt)
+        self.endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        self.timebase = try container.decode(MeetingTimebaseMetadata.self, forKey: .timebase)
+        self.state = try container.decode(MeetingSessionState.self, forKey: .state)
+        self.events = try container.decodeIfPresent([MeetingSessionEvent].self, forKey: .events) ?? []
+        self.failures = try container.decodeIfPresent([MeetingSessionFailure].self, forKey: .failures) ?? []
+        self.audioTracks = try container.decodeIfPresent([MeetingAudioTrack].self, forKey: .audioTracks) ?? []
+        self.speakers = try container.decodeIfPresent([MeetingSessionSpeaker].self, forKey: .speakers) ?? []
+        self.transcriptSegments = try container.decodeIfPresent(
+            [MeetingTranscriptSegment].self,
+            forKey: .transcriptSegments
+        ) ?? []
+        self.retention = try container.decode(MeetingRetentionState.self, forKey: .retention)
+        self.processingAttempts = try container.decodeIfPresent(
+            [MeetingProcessingAttempt].self,
+            forKey: .processingAttempts
+        ) ?? []
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+
+        // A v1 manifest stays readable, but is rewritten at v2 on the next save.
+        if self.schemaVersion < Self.currentSchemaVersion {
+            self.schemaVersion = Self.currentSchemaVersion
+        }
+    }
+
     func validateForPersistence() throws {
         guard self.schemaVersion > 0,
               self.schemaVersion <= Self.currentSchemaVersion
         else {
             throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
         }
-        guard self.languageCode == "en" else {
+        guard Self.supportedLanguageCodes.contains(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.selectedMicrophone.captureDeviceID.isEmpty else {
