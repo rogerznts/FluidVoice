@@ -50,7 +50,17 @@ run_public_build() {
     if [ "${signing_mode}" = "unsigned" ]; then
         echo "Running unsigned public FluidVoice build..."
         echo "Accessibility permission may need to be granted again after rebuilding."
-        exec xcodebuild "${build_args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+        # Distinct bundle identifier for unsigned dev builds.
+        #
+        # The released FluidVoice.app and this build otherwise share
+        # com.FluidApp.app, so macOS keeps ONE TCC record for both. The signed
+        # release owns it, and this unsigned build can never claim it — toggling
+        # Accessibility on has no effect, which reads as the app being broken.
+        # A separate identifier gives the dev build its own permission record.
+        exec xcodebuild "${build_args[@]}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            PRODUCT_BUNDLE_IDENTIFIER="${FLUIDVOICE_UNSIGNED_BUNDLE_ID:-com.FluidApp.app.debug}"
     fi
 
     development_team="$(resolve_development_team)"

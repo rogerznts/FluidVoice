@@ -1707,7 +1707,11 @@ private struct MeetingResultCanvas: View {
                     )
                     .frame(maxWidth: .infinity, minHeight: 180)
                 } else {
-                    LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                    // DIAGNOSTIC EXPERIMENT — not the final shape. LazyVStack is
+                    // what PERF-004 wants for hour-long transcripts; this swap
+                    // only isolates whether lazy materialisation is what makes
+                    // the scroll oscillate under hover.
+                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                         ForEach(self.session.transcriptSegments) { segment in
                             MeetingTranscriptSegmentRow(
                                 segment: segment,
@@ -2000,28 +2004,40 @@ private struct MeetingTranscriptSegmentRow: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: self.theme.metrics.spacing.lg) {
-            GridRow {
-                Text(Self.timestampText(self.segment.start.seconds))
-                    .font(self.theme.typography.codeCaption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+        // A per-row Grid cannot align anything: Grid aligns columns ACROSS its
+        // own rows, and every segment builds its own single-row Grid. What it
+        // did do was measure the wrapping transcript Text with an unbounded
+        // width proposal, which cycles against the surrounding
+        // LazyVStack/ScrollView once the history inspector narrows the canvas.
+        // An HStack with a fixed timestamp column gives the same visual result
+        // and a single, stable layout pass.
+        HStack(alignment: .top, spacing: self.theme.metrics.spacing.lg) {
+            Text(Self.timestampText(self.segment.start.seconds))
+                .font(self.theme.typography.codeCaption)
+                .foregroundStyle(self.theme.palette.tertiaryText)
+                .frame(width: Self.timestampColumnWidth, alignment: .leading)
 
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                    Text(self.speakerName)
-                        .font(self.theme.typography.captionStrong)
-                        .foregroundStyle(self.theme.palette.accent)
-                    Text(self.segment.text)
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .textSelection(.enabled)
-                }
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                Text(self.speakerName)
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.theme.palette.accent)
+                Text(self.segment.text)
+                    .font(self.theme.typography.body)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(Self.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"
         )
     }
+
+    /// Fixed width for the timestamp column, sized for `1:02:33`. Covers what
+    /// the Grid was nominally there for, without its measurement cost.
+    private static let timestampColumnWidth: CGFloat = 56
 
     private static func timestampText(_ seconds: TimeInterval) -> String {
         let total = max(0, Int(seconds.rounded(.down)))

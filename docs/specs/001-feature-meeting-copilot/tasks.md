@@ -130,6 +130,8 @@ Não entregue nesta fase: nada. T008–T014 completos no código; a validação 
 - [ ] **T029** [US1] Distinguir visualmente texto provisório de final (`FR-004`).
 - [ ] **T030** [P] [US1] Acessibilidade do painel: navegação completa por teclado, ordem lógica de VoiceOver, sem depender de cor isolada (`A11Y-001`, `A11Y-003`, `A11Y-004`).
 
+- [ ] **T030b** [US1] **Dívida herdada — restaurar virtualização do transcript.** A correção do travamento (ver "Correção de bug herdado", abaixo) trocou `LazyVStack` por `VStack` em `MeetingResultCanvas`, removendo a virtualização. Funciona para transcrições curtas e falha numa reunião longa. Restaurar `LazyVStack` com altura de linha estável, atendendo `PERF-004` e `FR-008`. **Bloqueia T025**, que constrói o fluxo virtualizado do copiloto sobre o mesmo padrão.
+
 **Checkpoint F4**: US1 completa e demonstrável de ponta a ponta.
 
 ---
@@ -217,3 +219,42 @@ Pare e escale antes de prosseguir se qualquer tarefa exigir:
 - alterar o contrato do `AudioActivityArbiter` entre ditado e reunião
 - tornar IDs de segmento instáveis sob renomeação de locutor
 - adicionar latência ao caminho de ditado
+
+---
+
+## Correção de bug herdado — travamento ao abrir sessão do histórico
+
+Descoberto durante a validação manual das fases 1 e 2, em 2026-08-06. **Não foi causado por esta spec**, mas a bloqueava: a US4 depende de abrir sessões salvas, e o painel de copiloto vive nessa mesma tela.
+
+### Sintoma
+
+Clicar numa reunião salva no inspector de histórico congelava o app por completo. Main thread a 100%, árvore de views com 11.608 frames de profundidade, 8.293 deles em `SwiftUICore`, nenhum código do app no stack.
+
+### Prova de que é herdado
+
+Build do commit `cd58ff8` — anterior a qualquer linha desta spec — em worktree separado. **Travou de forma idêntica.**
+
+### Bisect
+
+1. Substituir `MeetingResultCanvas` por um `Text` → não travou ⇒ causa dentro do canvas de resultado
+2. Reter o `ForEach` dos segmentos → não travou ⇒ causa na renderização de segmento
+3. Trocar `Grid` por `HStack` em `MeetingTranscriptSegmentRow` → travamento eliminado
+4. Sobrou oscilação de scroll sob hover; trocar `LazyVStack` por `VStack` → resolvido
+
+Hipóteses testadas e descartadas no caminho: IDs duplicados entre sessões (regenerados, travou igual), `duration` com `Date()` e `endedAt` nulo (as sessões têm `endedAt`), oscilação do `ViewThatFits` nos metadados (isolado, travou igual).
+
+### Causa raiz
+
+Cada segmento construía o **próprio** `Grid` de uma única `GridRow`. Um `Grid` alinha colunas *entre as linhas dele mesmo* — com uma linha só, não alinha nada. O que ele fazia era medir o `Text` da transcrição com proposta de largura ilimitada, ciclando contra o `LazyVStack`/`ScrollView` quando o inspector de histórico (290 pt) estreitava o canvas. Fora do histórico havia folga de largura e o ciclo não se fechava — por isso a tela funcionava logo após o processamento.
+
+### Correção aplicada
+
+`Sources/Fluid/UI/MeetingTranscriptionView.swift`: `HStack` com coluna de timestamp de largura fixa, e `VStack` no lugar de `LazyVStack`.
+
+### Dívida deixada
+
+O `VStack` não virtualiza. Rastreado em **T030b**, que bloqueia T025.
+
+### Sugestão
+
+Vale reportar ao upstream `altic-dev/FluidVoice`: o defeito está no código deles e afeta qualquer usuário com reuniões salvas.
