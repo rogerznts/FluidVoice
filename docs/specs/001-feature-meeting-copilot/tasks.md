@@ -104,17 +104,47 @@ Não entregue nesta fase: nada. T008–T014 completos no código; a validação 
 
 **Objetivo**: cartões de insight guiados pelo perfil ativo.
 
-- [ ] **T015** [US1] Criar `Copilot/CopilotContextWindow.swift`: janela deslizante com teto de tokens mais resumo acumulado para reuniões longas (`FR-011`, R-04).
-- [ ] **T016** [US1] Criar `Copilot/CopilotPromptBuilder.swift` montando o prompt a partir do perfil, do `insightFormat` (`FR-033`), do idioma da sessão e da janela de contexto.
-- [ ] **T017** [US1] Criar `Copilot/CopilotInsightEngine.swift`: gatilho por fim de turno de fala, supressão de disparos redundantes, throttle e cancelamento de requisições obsoletas (`FR-009`, `FR-011`).
-- [ ] **T018** [US1] Integrar com `LLMClient` usando streaming; nenhuma chamada quando não há fala relevante (`FR-009`).
-- [ ] **T019** [US1] Criar `Copilot/MeetingCopilotService.swift` como orquestrador por sessão, criado e destruído pelo `MeetingSessionCoordinator` (AD-004).
-- [ ] **T020** [US1] Instanciar o serviço no `MeetingSessionCoordinator.swift`, amarrado ao ciclo de vida da sessão e sobrevivendo ao fechamento da janela (`FR-032`).
-- [ ] **T021** [US1] Tratar falha de provider como erro isolado no cartão, jamais como falha de sessão (`FR-012`, `SC-005`).
-- [ ] **T022** [P] [US1] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotInsightTriggerTests.swift` e `CopilotContextWindowTests.swift` — disparo, silêncio, sobreposição, teto de janela.
-- [ ] **T023** [P] [US1] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotPromptBuilderTests.swift` — variação por perfil, formato e idioma.
+- [x] **T015** [US1] Criar `Copilot/CopilotContextWindow.swift`: janela deslizante com teto de tokens mais resumo acumulado para reuniões longas (`FR-011`, R-04).
+- [x] **T016** [US1] Criar `Copilot/CopilotPromptBuilder.swift` montando o prompt a partir do perfil, do `insightFormat` (`FR-033`), do idioma da sessão e da janela de contexto.
+- [x] **T017** [US1] Criar `Copilot/CopilotInsightEngine.swift`: gatilho por fim de turno de fala, supressão de disparos redundantes, throttle e cancelamento de requisições obsoletas (`FR-009`, `FR-011`).
+- [x] **T018** [US1] Integrar com `LLMClient` usando streaming; nenhuma chamada quando não há fala relevante (`FR-009`).
+- [x] **T019** [US1] Criar `Copilot/MeetingCopilotService.swift` como orquestrador por sessão, criado e destruído pelo `MeetingSessionCoordinator` (AD-004).
+- [x] **T020** [US1] Instanciar o serviço no `MeetingSessionCoordinator.swift`, amarrado ao ciclo de vida da sessão e sobrevivendo ao fechamento da janela (`FR-032`).
+- [x] **T021** [US1] Tratar falha de provider como erro isolado no cartão, jamais como falha de sessão (`FR-012`, `SC-005`).
+- [x] **T022** [P] [US1] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotInsightTriggerTests.swift` e `CopilotContextWindowTests.swift` — disparo, silêncio, sobreposição, teto de janela.
+- [x] **T023** [P] [US1] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotPromptBuilderTests.swift` — variação por perfil, formato e idioma.
 
 **Checkpoint F3**: insights coerentes com o perfil, dentro de `SC-001`, com falha de IA isolada.
+
+### Registro de execução F3 — 2026-08-06
+
+Arquivos novos em `Services/Meeting/Copilot/`:
+
+- `CopilotContextWindow.swift` — janela deslizante por orçamento de caracteres, com backlog do que saiu para virar resumo
+- `CopilotPromptBuilder.swift` — perfil + formato + idioma → mensagens; guardas de honestidade em todos os pedidos
+- `CopilotInsightEngine.swift` — política de gatilho pura, rota de provider, execução com supersessão
+- `MeetingCopilotService.swift` — orquestrador por sessão, estado observável, persistência com debounce
+- `MeetingSessionCoordinator+Copilot.swift` — ciclo de vida e ponte tap → copiloto
+
+Alterações no coordinator herdado: propriedade `copilot`, acessores estreitos, `appendProvisionalSegment` e as chamadas de start/stop. O grosso da lógica ficou no arquivo de extensão (R-05).
+
+Decisões tomadas na implementação:
+
+- **Orçamento em caracteres, não tokens.** Tokenização varia por modelo e a exatidão não compra nada aqui; ~8000 caracteres ficam perto de 2k tokens.
+- **Um pedido novo cancela o anterior.** Quando a resposta antiga chega, a conversa já andou — mostrá-la seria pior que não mostrar nada. Cartão superado é removido, não deixado obsoleto.
+- **Gatilho não dispara na fala do próprio usuário.** O copiloto responde ao interlocutor; reagir à fala de quem o usa sugeriria respostas para si mesmo.
+- **Chat carrega histórico; os demais pedidos não.** Mantém o custo dos automáticos constante ao longo de uma reunião longa.
+- **`recap` e `briefing` ignoram `insightFormat`.** São sumários por natureza; forçar "resposta pronta" distorceria a saída.
+- **Provider resolvido por `DictationProviderRoute`**, o mesmo caminho do AI Enhancement — `privateAIRoute` para local, `resolve` para nuvem (AD-005).
+- **ASR ao vivo usa `asr.fileTranscriptionProvider`**, o mesmo acessor da transcrição de arquivo, para não instanciar um segundo modelo (`PIPE-006`).
+
+Validações executadas:
+
+- `xcodebuild build-for-testing` → exit 0, zero erros
+- `swiftlint --strict` (Docker, igual ao CI) → `0 violations in 176 files`
+- `xcodebuild test` → **não executou**, mesmo bloqueio de ambiente das fases anteriores. 24 testes novos escritos e compilando.
+
+**Não entregue nesta fase, e importante:** o copiloto só liga quando `session.transcriptMode == .live`, e nada ainda define esse valor — o padrão é `.offlineAfterStop`. Falta também a seleção de provider antes do Start (T046). Portanto **a Fase 3 não é observável na interface**: os serviços existem, compilam e têm o ciclo de vida ligado, mas nenhuma reunião os aciona até a Fase 4 trazer o painel e o setup.
 
 ---
 

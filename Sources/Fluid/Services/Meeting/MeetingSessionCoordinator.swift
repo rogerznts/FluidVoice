@@ -78,6 +78,11 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var terminationTask: Task<Void, Never>?
     private var persistenceTail: Task<Void, Never>?
 
+    /// Copilot for the active meeting. Created on start, torn down on stop —
+    /// never a singleton, because only one meeting can be active (AD-004).
+    @Published private(set) var copilot: MeetingCopilotService?
+    private var liveTranscriptionTap: LiveTranscriptionTap?
+
     init(
         store: any MeetingSessionStoring,
         capture: any MeetingCaptureControlling,
@@ -94,6 +99,49 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     var currentSession: MeetingSession? {
         self.activeSession ?? self.latestCompletedSession
+    }
+
+    // MARK: - Copilot Wiring
+
+    // Narrow accessors so the copilot lifecycle can live in its own file
+    // (MeetingSessionCoordinator+Copilot.swift) instead of growing this one.
+
+    var captureController: any MeetingCaptureControlling { self.capture }
+
+    var liveTranscriptionTapValue: LiveTranscriptionTap? { self.liveTranscriptionTap }
+
+    func setCopilot(_ service: MeetingCopilotService?) {
+        self.copilot = service
+    }
+
+    func setLiveTranscriptionTap(_ tap: LiveTranscriptionTap?) {
+        self.liveTranscriptionTap = tap
+    }
+
+    /// Adds a provisional segment produced by the live tap (`LIVE-002`, T010).
+    ///
+    /// Provisional segments share the session's `transcriptSegments` array with
+    /// final ones and are replaced during post-Stop reconciliation.
+    func appendProvisionalSegment(
+        text: String,
+        kind: MeetingAudioTrackKind,
+        start: MeetingMediaTime,
+        end: MeetingMediaTime
+    ) {
+        guard var session = self.activeSession,
+              let track = session.audioTracks.first(where: { $0.kind == kind })
+        else { return }
+
+        session.transcriptSegments.append(
+            LiveTranscriptSegmentBuilder.makeSegment(
+                text: text,
+                trackID: track.id,
+                start: start,
+                end: end
+            )
+        )
+        session.updatedAt = Date()
+        self.activeSession = session
     }
 
     var isRecording: Bool {
@@ -200,6 +248,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             session.state = .recording
             session.updatedAt = Date()
+            self.startCopilot(for: session)
             self.activeSession = session
             self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
             self.state = .recording(session.id)
@@ -457,6 +506,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.state = .stopping
         session.updatedAt = Date()
         self.activeSession = session
+        // Wind the copilot down before capture finalisation: an in-flight live
+        // request has no value once the authoritative pipeline is about to run,
+        // and holding the ASR provider would only delay it (`PIPE-015`).
+        await self.stopCopilot()
         await self.flushQueuedPersistence()
         // Capture finalization takes priority over persistence availability.
         try? await self.store.save(session)
