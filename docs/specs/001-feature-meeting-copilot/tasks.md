@@ -27,15 +27,32 @@ description: "Tarefas de implementação — Meeting Copilot"
 
 **Objetivo**: modelos, persistência e perfis. Nada de US1–US5 pode começar antes desta fase fechar.
 
-- [ ] **T001** [FND] Criar `Sources/Fluid/Services/Meeting/Copilot/CopilotModels.swift` com `CopilotInsight`, `CopilotChatMessage`, `CopilotNote`, `CopilotBriefing` e `CopilotSessionArtifacts`. Todos `Codable`, `Sendable`, `Identifiable`, com `schemaVersion`. Insights ancoram em `MeetingMediaTime`, **não** em `MeetingTranscriptSegmentID` (AD-002).
-- [ ] **T002** [FND] Criar `Sources/Fluid/Persistence/MeetingCopilotProfileStore.swift` com `MeetingCopilotProfile` (id, nome, prompt de insight, prompt de briefing, `insightFormat`, variantes pt/en). Tipo próprio, **não** estender `SettingsStore.PromptMode` (AD-003).
-- [ ] **T003** [P] [FND] Semear cinco perfis embarcados em pt-BR e en — entrevista técnica, entrevista de emprego, vendas, aula, reunião interna — todos editáveis e duplicáveis (`FR-015`, `FR-034`).
-- [ ] **T004** [FND] Estender `Sources/Fluid/Services/Meeting/MeetingSessionStore.swift` para persistir `CopilotSessionArtifacts` junto da sessão, com escrita atômica e migração de schema. Não usar `UserDefaults` (`CODE-006`).
-- [ ] **T005** [FND] Adicionar `transcriptMode` (`.offlineAfterStop` | `.live`) e `copilotProviderChoice` a `MeetingSession` em `MeetingModels.swift`, incrementando `currentSchemaVersion` com migração do valor anterior (`LIVE-001`, AD-005).
-- [ ] **T006** [P] [FND] Adicionar preferências do copiloto ao `SettingsStore.swift`: posição do painel (acima/abaixo), estado de colapso, perfil padrão, modo de insight (automático/manual).
-- [ ] **T007** [P] [FND] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotArtifactPersistenceTests.swift` — round-trip, migração de schema e sobrevivência a relaunch (`SC-006`).
+- [x] **T001** [FND] Criar `Sources/Fluid/Services/Meeting/Copilot/CopilotModels.swift` com `CopilotInsight`, `CopilotChatMessage`, `CopilotNote`, `CopilotBriefing` e `CopilotSessionArtifacts`. Todos `Codable`, `Sendable`, `Identifiable`, com `schemaVersion`. Insights ancoram em `MeetingMediaTime`, **não** em `MeetingTranscriptSegmentID` (AD-002).
+- [x] **T002** [FND] Criar `Sources/Fluid/Persistence/MeetingCopilotProfileStore.swift` com `MeetingCopilotProfile` (id, nome, prompt de insight, prompt de briefing, `insightFormat`, variantes pt/en). Tipo próprio, **não** estender `SettingsStore.PromptMode` (AD-003).
+- [x] **T003** [P] [FND] Semear cinco perfis embarcados em pt-BR e en — entrevista técnica, entrevista de emprego, vendas, aula, reunião interna — todos editáveis e duplicáveis (`FR-015`, `FR-034`).
+- [x] **T004** [FND] Estender `Sources/Fluid/Services/Meeting/MeetingSessionStore.swift` para persistir `CopilotSessionArtifacts` junto da sessão, com escrita atômica e migração de schema. Não usar `UserDefaults` (`CODE-006`).
+- [x] **T005** [FND] Adicionar `transcriptMode` (`.offlineAfterStop` | `.live`) e `copilotProviderChoice` a `MeetingSession` em `MeetingModels.swift`, incrementando `currentSchemaVersion` com migração do valor anterior (`LIVE-001`, AD-005).
+- [x] **T006** [P] [FND] Adicionar preferências do copiloto ao `SettingsStore.swift`: posição do painel (acima/abaixo), estado de colapso, perfil padrão, modo de insight (automático/manual).
+- [x] **T007** [P] [FND] Criar `Tests/FluidDictationIntegrationTests/Copilot/CopilotArtifactPersistenceTests.swift` — round-trip, migração de schema e sobrevivência a relaunch (`SC-006`).
 
 **Checkpoint F1**: artefatos gravam e recarregam; perfis embarcados aparecem; `./build.sh unsigned` passa.
+
+### Registro de execução F1 — 2026-08-06
+
+Entregue além do previsto nas tarefas, por necessidade:
+
+- `MeetingModels.swift`: `validateForPersistence()` travava `languageCode == "en"` (upstream `DEC-001` codificado). Relaxado para `MeetingSession.supportedLanguageCodes = ["en", "pt"]`, conforme `DEC-COP-001`.
+- `MeetingSessionStore.swift`: seis membros passaram de `private` a `internal` e `MeetingSessionFileSystem` deixou de ser `private`, para que a persistência de artefatos coubesse em `MeetingSessionStore+Copilot.swift` em vez de dentro do arquivo herdado (R-05).
+- `MeetingSession`: ganhou `init(from decoder:)` explícito. O inicializador sintetizado falharia ao ler manifests v1, que não têm os dois campos novos.
+- Teste extra não previsto: `MeetingCopilotProfileStoreTests.swift`, cobrindo seeds, idempotência e resolução de idioma.
+
+Validações executadas:
+
+- `./build.sh unsigned` → `** BUILD SUCCEEDED **`
+- `swiftlint --strict` (Docker `ghcr.io/realm/swiftlint:0.63.2`, igual ao CI) → `0 violations in 163 files`
+- `xcodebuild test` → **não executou**. O test host trava com `The test runner hung before establishing connection`. Reproduzido em `AudioBufferConverterTests`, teste pré-existente não tocado por esta fase: é limitação do ambiente local, não do código desta spec. Os testes **compilam** — a falha ocorre após o build, ao subir o runner. Execução pendente em ambiente de CI.
+
+Desvio de nomenclatura detectado: T010 fala em "array `segments` da sessão"; o campo real é `transcriptSegments`.
 
 ---
 
@@ -43,15 +60,43 @@ description: "Tarefas de implementação — Meeting Copilot"
 
 **Objetivo**: texto provisório durante a gravação, sem tocar na durabilidade da captura.
 
-- [ ] **T008** [FND] Expor um consumidor opcional de buffers em `MeetingCaptureEngine.swift`: cópia downsampled entregue por stream limitado com **descarte** sob pressão. Callbacks de captura permanecem mínimos (`CAP-012`, AD-001, R-02).
-- [ ] **T009** [FND] Criar `Copilot/LiveTranscriptionTap.swift` consumindo esse stream e alimentando ASR streaming multilíngue (pt/en) conforme o `languageCode` da sessão (`FR-000`, `DEC-COP-001`).
-- [ ] **T010** [FND] Emitir segmentos com `status = .provisional` no array `segments` da sessão, com IDs estáveis e `revision` incremental (`LIVE-002`).
-- [ ] **T011** [FND] Serializar o acesso ao provider de ASR entre caminho ao vivo e pipeline offline; o vivo cede prioridade ao durável (`PIPE-006`, `PIPE-015`, R-01).
-- [ ] **T012** [FND] Implementar reconciliação pós-Stop em `MeetingProcessingPipeline.swift`: segmentos finais substituem provisórios **preservando correções manuais** do usuário (`LIVE-007`, `LIVE-008`, R-03).
-- [ ] **T013** [P] [FND] Criar `Tests/FluidDictationIntegrationTests/Copilot/LiveTranscriptReconciliationTests.swift` cobrindo substituição, preservação de correção e ancoragem temporal de insights.
-- [ ] **T014** [FND] Teste de carga: sessão longa com consumidor ao vivo artificialmente lento, provando que nenhum chunk finalizado é perdido (`CAP-018`, R-02).
+- [x] **T008** [FND] Expor um consumidor opcional de buffers em `MeetingCaptureEngine.swift`: cópia downsampled entregue por stream limitado com **descarte** sob pressão. Callbacks de captura permanecem mínimos (`CAP-012`, AD-001, R-02).
+- [x] **T009** [FND] Criar `Copilot/LiveTranscriptionTap.swift` consumindo esse stream e alimentando ASR streaming multilíngue (pt/en) conforme o `languageCode` da sessão (`FR-000`, `DEC-COP-001`).
+- [x] **T010** [FND] Emitir segmentos com `status = .provisional` no array `segments` da sessão, com IDs estáveis e `revision` incremental (`LIVE-002`).
+- [x] **T011** [FND] Serializar o acesso ao provider de ASR entre caminho ao vivo e pipeline offline; o vivo cede prioridade ao durável (`PIPE-006`, `PIPE-015`, R-01).
+- [x] **T012** [FND] Implementar reconciliação pós-Stop em `MeetingProcessingPipeline.swift`: segmentos finais substituem provisórios **preservando correções manuais** do usuário (`LIVE-007`, `LIVE-008`, R-03).
+- [x] **T013** [P] [FND] Criar `Tests/FluidDictationIntegrationTests/Copilot/LiveTranscriptReconciliationTests.swift` cobrindo substituição, preservação de correção e ancoragem temporal de insights.
+- [x] **T014** [FND] Teste de carga: sessão longa com consumidor ao vivo artificialmente lento, provando que nenhum chunk finalizado é perdido (`CAP-018`, R-02).
 
 **Checkpoint F2**: texto provisório aparece durante a gravação e é substituído corretamente após o Stop; captura permanece íntegra sob estresse.
+
+### Registro de execução F2 — 2026-08-06
+
+Arquivos novos, todos em `Services/Meeting/Copilot/`:
+
+- `MeetingLiveAudioSink.swift` — protocolo do sink, ring buffer limitado com descarte, conversão de `CMSampleBuffer` para mono `Float`
+- `LiveTranscriptionTap.swift` — janela deslizante, gate de silêncio, throttle, resample para 16 kHz fora do callback
+- `MeetingASRAccessArbiter.swift` — serialização entre caminho ao vivo e offline; o vivo é recusado, não enfileirado
+- `LiveTranscriptReconciler.swift` — construtor de segmento provisório e reconciliação pós-Stop
+
+Alterações em arquivos herdados, cirúrgicas:
+
+- `MeetingCaptureEngine.swift`: `setLiveAudioSink` no protocolo **com implementação default vazia**, para não quebrar `FakeMeetingCaptureController` nos testes existentes; sink propagado aos dois runtimes; uma linha em cada callback de sample buffer.
+- `MeetingSessionCoordinator.swift`: `session.transcriptSegments = result.segments` virou chamada ao reconciler — é a mudança que impede a perda de correções do usuário.
+
+Decisões tomadas na implementação:
+
+- O ring descarta o **mais antigo**, não o mais novo: o copiloto só consegue agir sobre o presente da conversa.
+- `runLiveIfAvailable` retorna `nil` quando o offline detém o provider, em vez de esperar. Transcrição ao vivo que chega atrasada não tem valor, e enfileirar só cria backlog.
+- `resample` retorna `[]` em vez de opcional (exigência do lint `discouraged_optional_collection`); vazio e falha levam à mesma ação do chamador.
+
+Validações executadas:
+
+- `xcodebuild build-for-testing` → exit 0, zero erros (app + alvo de testes compilam)
+- `swiftlint --strict` (Docker, igual ao CI) → `0 violations in 169 files`
+- `xcodebuild test` → **não executou**, mesmo bloqueio de ambiente da F1: `The test runner hung before establishing connection`, reproduzido em teste pré-existente. 26 testes novos escritos e compilando, execução pendente de CI.
+
+Não entregue nesta fase: nada. T008–T014 completos no código; a validação de comportamento em runtime depende do CI.
 
 ---
 
