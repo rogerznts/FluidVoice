@@ -496,7 +496,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 throw CancellationError()
             }
             session.speakers = result.speakers
-            session.transcriptSegments = result.segments
+            // Not a plain assignment: provisional segments the user corrected
+            // during the meeting survive the offline result (`LIVE-007`, T012).
+            LiveTranscriptReconciler.reconcile(session: &session, finalSegments: result.segments)
             session.processingAttempts.removeAll {
                 $0.completedAt == nil && $0.id != result.attempt.id
             }

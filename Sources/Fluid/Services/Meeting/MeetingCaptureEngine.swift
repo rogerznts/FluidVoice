@@ -14,6 +14,17 @@ nonisolated protocol MeetingCaptureControlling: Sendable {
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult
     func shutdownForTermination() async
+
+    /// Installs a best-effort consumer of captured audio, used by live
+    /// transcription. Must be called before `start`; it never affects the
+    /// durable write path (AD-001).
+    func setLiveAudioSink(_ sink: (any MeetingLiveAudioSink)?) async
+}
+
+extension MeetingCaptureControlling {
+    /// Default no-op so capture implementations that predate live transcription
+    /// — including test doubles — keep conforming unchanged.
+    func setLiveAudioSink(_ sink: (any MeetingLiveAudioSink)?) async {}
 }
 
 actor MeetingCaptureEngine: MeetingCaptureControlling {
@@ -26,6 +37,11 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
     private var activeCapture: ActiveCapture?
     private var startingSessionID: MeetingSessionID?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?
+    private var liveAudioSink: (any MeetingLiveAudioSink)?
+
+    func setLiveAudioSink(_ sink: (any MeetingLiveAudioSink)?) {
+        self.liveAudioSink = sink
+    }
 
     func start(
         session: MeetingSession,
@@ -65,7 +81,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 microphone: configuration.microphone,
                 applicationWriter: applicationWriter,
                 microphoneWriter: microphoneWriter,
-                eventHandler: eventHandler
+                eventHandler: eventHandler,
+                liveAudioSink: self.liveAudioSink
             )
         case .inRoom:
             guard let microphoneWriter = writersByKind[.microphone] else {
@@ -74,7 +91,8 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             runtime = try InRoomMicrophoneCaptureRuntime(
                 microphone: configuration.microphone,
                 writer: microphoneWriter,
-                eventHandler: eventHandler
+                eventHandler: eventHandler,
+                liveAudioSink: self.liveAudioSink
             )
         }
 
@@ -220,6 +238,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
+    private let liveAudioSink: (any MeetingLiveAudioSink)?
     private let stateLock = NSLock()
     private var delegateProxy: ScreenCaptureRuntimeDelegateProxy?
     private var stopping = false
@@ -229,12 +248,14 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         stream: SCStream,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioSink: (any MeetingLiveAudioSink)?
     ) {
         self.stream = stream
         self.applicationWriter = applicationWriter
         self.microphoneWriter = microphoneWriter
         self.eventHandler = eventHandler
+        self.liveAudioSink = liveAudioSink
         super.init()
     }
 
@@ -243,7 +264,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioSink: (any MeetingLiveAudioSink)?
     ) async throws -> ScreenCaptureMeetingRuntime {
         let content: SCShareableContent
         do {
@@ -288,7 +310,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             stream: stream,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
-            eventHandler: eventHandler
+            eventHandler: eventHandler,
+            liveAudioSink: liveAudioSink
         )
         placeholder.owner = runtime
         runtime.delegateProxy = placeholder
@@ -357,8 +380,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         switch outputType {
         case .audio:
             self.applicationWriter.enqueue(sampleBuffer)
+            self.liveAudioSink?.receive(sampleBuffer, from: .applicationAudio)
         case .microphone:
             self.microphoneWriter.enqueue(sampleBuffer)
+            self.liveAudioSink?.receive(sampleBuffer, from: .microphone)
         case .screen:
             break
         @unknown default:
@@ -401,6 +426,7 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.inroom.control")
     private let stateLock = NSLock()
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
+    private let liveAudioSink: (any MeetingLiveAudioSink)?
     private var stopping = false
     private var emittedUnexpectedStop = false
     private var notificationObservers: [NSObjectProtocol] = []
@@ -408,10 +434,12 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     init(
         microphone: MeetingMicrophoneIdentity,
         writer: MeetingAudioChunkWriter,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioSink: (any MeetingLiveAudioSink)?
     ) throws {
         self.writer = writer
         self.eventHandler = eventHandler
+        self.liveAudioSink = liveAudioSink
         super.init()
         guard let device = AVCaptureDevice(uniqueID: microphone.captureDeviceID) else {
             throw MeetingCaptureError.microphoneUnavailable
@@ -474,6 +502,7 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         self.stateLock.unlock()
         guard shouldAccept else { return }
         self.writer.enqueue(sampleBuffer)
+        self.liveAudioSink?.receive(sampleBuffer, from: .microphone)
     }
 
     private func observeSessionLifecycle() {
