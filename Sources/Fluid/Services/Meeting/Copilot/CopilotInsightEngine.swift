@@ -36,6 +36,51 @@ nonisolated struct CopilotInsightTrigger: Sendable {
     }
 }
 
+// MARK: - Turn Accumulation
+
+/// Decides *when* enough has been said to be worth a suggestion.
+///
+/// Extracted from `MeetingCopilotService` because the two worst bugs in this
+/// feature lived here and were pure arithmetic: a debounce shorter than the
+/// interval it was debouncing, and a ceiling measured against a value that is
+/// nil until the first insight. Neither is observable in a service that needs a
+/// running meeting; both are trivial to assert on a struct.
+nonisolated struct CopilotTurnAccumulator: Sendable {
+    /// Silence required before a suggestion is produced.
+    ///
+    /// **Must exceed the live transcription interval.** Transcription arrives in
+    /// slices; if this is shorter than that spacing, every slice arrives after
+    /// the debounce has already elapsed and nothing is ever actually debounced.
+    var turnPause: TimeInterval = 7
+
+    /// Ceiling for continuous speech, so a monologue still gets suggestions.
+    var maximumWait: TimeInterval = 20
+
+    /// Enough accumulated speech to reason about. A clause is not a thought.
+    var minimumCharacters = 220
+
+    enum Decision: Equatable, Sendable {
+        /// Not enough said yet; keep collecting.
+        case hold
+        /// Enough material, but the speaker is still going — wait for a pause.
+        case waitForPause
+        /// Ceiling reached; produce now even though speech continues.
+        case fireNow
+    }
+
+    /// - Parameter elapsed: seconds since the last insight, or since this
+    ///   accumulation began when there has not been one. Passing zero for "no
+    ///   previous insight" is what made the ceiling unreachable.
+    func decide(accumulatedCharacters: Int, elapsed: TimeInterval) -> Decision {
+        guard accumulatedCharacters > 0 else { return .hold }
+
+        if elapsed >= self.maximumWait {
+            return .fireNow
+        }
+        return accumulatedCharacters >= self.minimumCharacters ? .waitForPause : .hold
+    }
+}
+
 // MARK: - Provider Route
 
 /// Where a copilot request should be sent, resolved once per session (AD-005).
@@ -174,6 +219,8 @@ actor CopilotInsightEngine {
         switch request {
         case .briefing: return 2000
         case .recap: return 600
+        case .webSearch: return 700
+        case .notes: return 500
         case .automaticInsight, .clarify, .lookUp, .chat: return 400
         }
     }

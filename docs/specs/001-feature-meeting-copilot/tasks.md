@@ -225,13 +225,13 @@ Validações executadas:
 
 ## Fase 5: Ações rápidas e chat — US2 (P1) e US3 (P2)
 
-- [ ] **T031** [US2] Criar `UI/Meeting/Copilot/CopilotActionBar.swift` com **Esclarecer**, **Recapitular** e **Pesquisar**.
-- [ ] **T032** [US2] Implementar as três ações no `CopilotInsightEngine`, cada uma com sua semântica de prompt sobre a janela de contexto.
-- [ ] **T033** [US2] **Pesquisar** declara explicitamente que responde a partir do conhecimento do modelo e não consultou fontes externas (`FR-013`, A-04).
-- [ ] **T034** [US2] Respostas de ação entram no mesmo fluxo cronológico dos insights automáticos, identificadas por origem (`FR-007`).
-- [ ] **T035** [US3] Criar `Copilot/CopilotChatService.swift` mantendo o fio da conversa e citando a transcrição acumulada.
-- [ ] **T036** [US3] Criar `UI/Meeting/Copilot/CopilotChatInput.swift`; novos segmentos de transcrição **não** podem apagar o texto em digitação nem roubar o foco (`FR-007`, edge case).
-- [ ] **T037** [US3] Permitir chat sobre sessões já encerradas, a partir da transcrição final (`US3` cenário 4).
+- [x] **T031** [US2] Criar `UI/Meeting/Copilot/CopilotActionBar.swift` com **Esclarecer**, **Recapitular** e **Pesquisar**.
+- [x] **T032** [US2] Implementar as três ações no `CopilotInsightEngine`, cada uma com sua semântica de prompt sobre a janela de contexto.
+- [x] **T033** [US2] **Pesquisar** declara explicitamente que responde a partir do conhecimento do modelo e não consultou fontes externas (`FR-013`, A-04).
+- [x] **T034** [US2] Respostas de ação entram no mesmo fluxo cronológico dos insights automáticos, identificadas por origem (`FR-007`).
+- [x] **T035** [US3] Criar `Copilot/CopilotChatService.swift` mantendo o fio da conversa e citando a transcrição acumulada.
+- [x] **T036** [US3] Criar `UI/Meeting/Copilot/CopilotChatInput.swift`; novos segmentos de transcrição **não** podem apagar o texto em digitação nem roubar o foco (`FR-007`, edge case).
+- [x] **T037** [US3] Permitir chat sobre sessões já encerradas, a partir da transcrição final (`US3` cenário 4).
 
 **Checkpoint F5**: US2 e US3 completas, dentro de `SC-002`.
 
@@ -239,16 +239,45 @@ Validações executadas:
 
 ## Fase 6: Notas e briefing — US4 (P2) e US5 (P2)
 
-- [ ] **T038** [US4] Criar `Copilot/CopilotNoteExtractor.swift` acumulando decisões, pendências e perguntas em aberto, ancoradas a timestamps (`FR-018`).
-- [ ] **T039** [US4] Exibir notas na sessão salva e garantir que a exclusão do áudio as preserve (`FR-020`).
-- [ ] **T040** [US4] Estender o painel de histórico herdado do `meeting-m1` para mostrar transcrição, insights, chat, notas e briefings juntos (`US4` cenário 2).
-- [ ] **T041** [US4] Exclusão da reunião remove todos os artefatos de copiloto associados (`FR-021`).
-- [ ] **T042** [US5] Criar `Copilot/CopilotBriefingService.swift` gerando sobre a transcrição **autoritativa**, com aviso explícito quando a base for provisória (`FR-022`).
-- [ ] **T043** [US5] Criar `UI/Meeting/Copilot/CopilotBriefingView.swift` com seletor de perfil de briefing e geração sob demanda.
-- [ ] **T044** [US5] Permitir múltiplos briefings coexistindo por sessão, identificados por perfil e horário (`FR-023`).
-- [ ] **T045** [US5] Exportação omitindo embeddings, fingerprints de modelo e vetores de confiança (`FR-024`, `UX-RESULT-010`).
+- [x] **T038** [US4] Criar `Copilot/CopilotNoteExtractor.swift` acumulando decisões, pendências e perguntas em aberto, ancoradas a timestamps (`FR-018`).
+- [x] **T039** [US4] Exibir notas na sessão salva e garantir que a exclusão do áudio as preserve (`FR-020`).
+- [x] **T040** [US4] Estender o painel de histórico herdado do `meeting-m1` para mostrar transcrição, insights, chat, notas e briefings juntos (`US4` cenário 2).
+- [x] **T041** [US4] Exclusão da reunião remove todos os artefatos de copiloto associados (`FR-021`).
+- [x] **T042** [US5] Criar `Copilot/CopilotBriefingService.swift` gerando sobre a transcrição **autoritativa**, com aviso explícito quando a base for provisória (`FR-022`).
+- [x] **T043** [US5] Criar `UI/Meeting/Copilot/CopilotBriefingView.swift` com seletor de perfil de briefing e geração sob demanda.
+- [x] **T044** [US5] Permitir múltiplos briefings coexistindo por sessão, identificados por perfil e horário (`FR-023`).
+- [x] **T045** [US5] Exportação omitindo embeddings, fingerprints de modelo e vetores de confiança (`FR-024`, `UX-RESULT-010`).
 
 **Checkpoint F6**: US4 e US5 completas; `SC-008` verificado.
+
+### Registro de execução F5 e F6 — 2026-08-07
+
+Arquivos novos: `CopilotActionBar`, `CopilotBriefingView` (UI); `CopilotNoteExtractor`, `CopilotWebSearchService` (serviços).
+
+Entregue além das tarefas, a pedido durante a validação:
+
+- **`Search web` — quinta ação, com busca real.** Revoga a premissa `A-04`; registrado como `DEC-COP-003` na spec. Usa a API nativa do Gemini com `google_search`, porque o endpoint OpenAI-compatível do app não expõe grounding. Exibe fontes clicáveis. Com outro provedor, falha explicitamente em vez de responder de memória fingindo pesquisa.
+- **`Take notes` sob demanda** em vez de extração automática por turno: cada extração é uma chamada completa ao modelo e competiria com as sugestões que o usuário está lendo.
+
+Correções feitas na validação:
+
+- **Ações usavam só a última fatia de ~3,5s.** `recentStretch()` passou a combinar o bloco aberto com o que foi dito desde então; os prompts pedem "o assunto sendo tratado agora", não "a última frase".
+- **Ordenação do fluxo estava por tempo de mídia.** Uma ação manual acontece agora mas ancora no tempo de mídia da última fala, que pode ser anterior ao de cartões já em tela — a resposta era inserida acima deles. Passou a ordenar por `createdAt`: o painel é uma sequência de eventos, não uma linha do tempo da gravação.
+
+Decisões de implementação:
+
+- **`CopilotNoteExtractor` descarta linhas sem prefixo reconhecido.** Uma decisão inventada registrada como fato é pior que uma decisão faltando.
+- **Deduplicação de notas por tipo + texto normalizado.** Notas são extraídas várias vezes ao longo da reunião; sem isso a lista vira transcrição de si mesma.
+- **T037 resolvido com um copiloto de revisão** (`loadForReview`), criado a partir da sessão do histórico com a transcrição autoritativa como contexto. Chat, notas e briefing funcionam sobre reuniões encerradas.
+
+Validações executadas:
+
+- `xcodebuild build-for-testing` → exit 0
+- `swiftlint --strict` → `0 violations in 186 files`
+- **Validação manual**: cinco ações, chat, notas e briefing confirmados em uso real
+- `xcodebuild test` → segue sem executar neste ambiente
+
+Testes novos: `CopilotTurnAccumulatorTests` (10) e `CopilotNoteExtractorTests` (12). O primeiro é regressão direta dos dois bugs de aritmética temporal da F4 — a política de tempo foi extraída para `CopilotTurnAccumulator`, um struct puro, justamente para ser testável sem reunião rodando.
 
 ---
 

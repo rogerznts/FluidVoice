@@ -108,6 +108,9 @@ struct MeetingTranscriptionView: View {
     @State private var cachedStorageReady = false
     @State private var meetingHistory: [MeetingSession] = []
     @State private var selectedHistorySessionID: MeetingSessionID?
+    /// Copilot bound to a finished meeting, so notes, briefing, and chat work
+    /// after the fact (`T037`). Separate from the coordinator's live copilot.
+    @State private var reviewCopilot: MeetingCopilotService?
     @State private var meetingHistoryError: String?
     @AppStorage("MeetingHistoryInspectorVisible") private var isMeetingHistoryVisible = true
 
@@ -148,7 +151,7 @@ struct MeetingTranscriptionView: View {
 
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    if self.settings.copilotPanelPlacement == .above, let copilot = coordinator.copilot {
+                    if self.settings.copilotPanelPlacement == .above, let copilot = activeCopilot {
                         CopilotPanelView(copilot: copilot)
                     }
 
@@ -166,10 +169,11 @@ struct MeetingTranscriptionView: View {
                         onRevealAudio: self.revealCapturedAudio,
                         onCopyTranscript: self.copyTranscript,
                         onOpenMeetingSettings: self.openMeetingSettings,
-                        isRetrying: self.isRetrying
+                        isRetrying: self.isRetrying,
+                        copilot: self.activeCopilot
                     )
 
-                    if self.settings.copilotPanelPlacement == .below, let copilot = coordinator.copilot {
+                    if self.settings.copilotPanelPlacement == .below, let copilot = activeCopilot {
                         CopilotPanelView(copilot: copilot)
                     }
                 }
@@ -209,6 +213,9 @@ struct MeetingTranscriptionView: View {
         .onChange(of: self.coordinator.latestCompletedSession?.id) { _, _ in
             Task { await self.loadMeetingHistory() }
         }
+        .onChange(of: self.reviewSessionID) { _, _ in
+            Task { await self.prepareReviewCopilot() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task {
                 async let sources: Void = self.refreshSources(requestPermissions: false)
@@ -234,6 +241,45 @@ struct MeetingTranscriptionView: View {
             )
             .interactiveDismissDisabled(!SettingsStore.shared.meetingRecordingDefaults.isConfigured)
         }
+    }
+
+    /// The copilot the panel should show: the live one while recording, the
+    /// review one for a finished meeting.
+    private var activeCopilot: MeetingCopilotService? {
+        self.coordinator.copilot ?? self.reviewCopilot
+    }
+
+    /// Meeting currently being reviewed, if any.
+    private var reviewSessionID: MeetingSessionID? {
+        if case let .result(session) = self.canvasState { return session.id }
+        return nil
+    }
+
+    /// Builds a copilot for the meeting on screen, loading its saved artifacts
+    /// and filling the context from the authoritative transcript.
+    private func prepareReviewCopilot() async {
+        guard self.coordinator.copilot == nil,
+              case let .result(session) = self.canvasState
+        else {
+            self.reviewCopilot = nil
+            return
+        }
+
+        let choice = session.copilotProviderChoice
+        let route = CopilotProviderRoute.resolve(choice: choice)
+        let service = MeetingCopilotService(
+            sessionID: session.id,
+            language: CopilotSeedLanguage.resolve(from: session.languageCode),
+            providerChoice: choice,
+            route: route
+        )
+        if !route.isUsable {
+            service.reportProviderUnavailable(choice: choice)
+        }
+
+        let artifacts = try? await MeetingSessionStore.shared.loadArtifacts(sessionID: session.id)
+        service.loadForReview(session: session, artifacts: artifacts)
+        self.reviewCopilot = service
     }
 
     private var canvasState: MeetingTranscriptionCanvasState {
@@ -735,6 +781,8 @@ struct MeetingTranscriptionCanvas: View {
     let onCopyTranscript: (MeetingSession) -> Void
     let onOpenMeetingSettings: () -> Void
     let isRetrying: Bool
+    /// Copilot for the meeting on screen, when there is one.
+    var copilot: MeetingCopilotService?
 
     @Environment(\.theme) private var theme
 
@@ -774,7 +822,8 @@ struct MeetingTranscriptionCanvas: View {
                 case let .result(session):
                     MeetingResultCanvas(
                         session: session,
-                        onCopyTranscript: self.onCopyTranscript
+                        onCopyTranscript: self.onCopyTranscript,
+                        copilot: self.copilot
                     )
                 case let .failed(session, message):
                     MeetingFailureCanvas(
@@ -1794,6 +1843,7 @@ private struct MeetingProcessingCanvas: View {
 private struct MeetingResultCanvas: View {
     let session: MeetingSession
     let onCopyTranscript: (MeetingSession) -> Void
+    var copilot: MeetingCopilotService?
 
     @Environment(\.theme) private var theme
 
@@ -1859,6 +1909,10 @@ private struct MeetingResultCanvas: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
+
+            if let copilot {
+                CopilotBriefingView(copilot: copilot)
             }
 
             Button("Copy Transcript", systemImage: "doc.on.doc") {

@@ -47,6 +47,20 @@ struct CopilotPanelView: View {
                         chatMessages: self.copilot.chatMessages
                     )
                     .frame(height: self.expandedHeight)
+
+                    CopilotActionBar(
+                        isBusy: self.copilot.isBusy,
+                        isEnabled: self.copilot.unavailableReason == nil,
+                        onAction: { request in
+                            Task { await self.copilot.runQuickAction(request) }
+                        },
+                        onSend: { question in
+                            Task { await self.copilot.sendChatMessage(question) }
+                        },
+                        onExtractNotes: {
+                            Task { await self.copilot.extractNotes() }
+                        }
+                    )
                 }
             }
         }

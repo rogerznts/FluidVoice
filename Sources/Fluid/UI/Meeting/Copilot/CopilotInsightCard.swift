@@ -115,6 +115,10 @@ struct CopilotInsightCard: View {
                     .foregroundStyle(self.theme.palette.primaryText)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if !self.insight.sources.isEmpty {
+                    self.sourceList
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(self.theme.metrics.spacing.md)
@@ -125,11 +129,44 @@ struct CopilotInsightCard: View {
         }
     }
 
+    /// Pages behind a grounded answer.
+    ///
+    /// Without these the user cannot tell a verified claim from a fluent guess,
+    /// which is the whole reason to search at all.
+    private var sourceList: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            Divider()
+            Text("Sources")
+                .font(self.theme.typography.tinyStrong)
+                .foregroundStyle(self.theme.palette.tertiaryText)
+                .textCase(.uppercase)
+
+            ForEach(self.insight.sources) { source in
+                if let url = URL(string: source.uri) {
+                    Link(destination: url) {
+                        HStack(spacing: self.theme.metrics.spacing.xs) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(self.theme.typography.tiny)
+                            Text(source.title)
+                                .font(self.theme.typography.caption)
+                                .lineLimit(1)
+                        }
+                    }
+                    .accessibilityLabel("Source: \(source.title)")
+                }
+            }
+        }
+        .padding(.top, self.theme.metrics.spacing.xs)
+    }
+
     // MARK: - Presentation
 
     /// `DEC-COP-002` surfaced: the heading tells the user whether this is
     /// something to say or something to work from.
     private var formatHeading: String {
+        if self.insight.origin == .actionWebSearch {
+            return "What the web says"
+        }
         switch self.insight.format {
         case .draftedResponse:
             return "Say this"
@@ -144,6 +181,7 @@ struct CopilotInsightCard: View {
         case .actionClarify: return "questionmark.circle"
         case .actionRecap: return "list.bullet.rectangle"
         case .actionLookUp: return "book"
+        case .actionWebSearch: return "globe"
         }
     }
 

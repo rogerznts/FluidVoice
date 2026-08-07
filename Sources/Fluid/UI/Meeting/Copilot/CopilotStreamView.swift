@@ -12,12 +12,18 @@ struct CopilotStreamView: View {
 
     @Environment(\.theme) private var theme
 
-    /// Insights and chat merged by media time, so a question asked mid-meeting
-    /// lands where it was asked rather than at the end.
+    /// Insights and chat merged by **when they appeared**, not by media time.
+    ///
+    /// Media time was the obvious choice and the wrong one: a manual action
+    /// happens now but anchors to the media time of the last thing said, which
+    /// can be earlier than cards already on screen — so pressing a button
+    /// inserted its answer above them instead of at the end.
     private var entries: [Entry] {
-        let insightEntries = self.insights.map { Entry(id: $0.id, sortKey: $0.anchor.seconds, kind: .insight($0)) }
+        let insightEntries = self.insights.map {
+            Entry(id: $0.id, sortKey: $0.createdAt, kind: .insight($0))
+        }
         let chatEntries = self.chatMessages.map {
-            Entry(id: $0.id, sortKey: $0.anchor?.seconds ?? .greatestFiniteMagnitude, kind: .chat($0))
+            Entry(id: $0.id, sortKey: $0.createdAt, kind: .chat($0))
         }
         return (insightEntries + chatEntries).sorted { lhs, rhs in
             lhs.sortKey == rhs.sortKey ? lhs.id.uuidString < rhs.id.uuidString : lhs.sortKey < rhs.sortKey
@@ -79,7 +85,7 @@ struct CopilotStreamView: View {
         }
 
         let id: UUID
-        let sortKey: Double
+        let sortKey: Date
         let kind: Kind
     }
 }

@@ -58,19 +58,11 @@ final class MeetingCopilotService: ObservableObject {
     /// whole stretch rather than only the newest fragment.
     private var openInsightQuotes: [String] = []
 
-    /// How long the speaker must pause before a suggestion is produced.
-    ///
-    /// Must exceed the tap's transcription interval (~3.5s). At 2.5s it never
-    /// waited for anything: every slice arrived after the debounce had already
-    /// elapsed, so every fragment fired.
-    private static let turnPause: TimeInterval = 7
-    /// Ceiling for continuous speech, so a monologue still gets suggestions.
-    private static let maxSilenceWait: TimeInterval = 20
+    /// When to produce a suggestion. Pure and testable — see
+    /// `CopilotTurnAccumulator`.
+    private let accumulator = CopilotTurnAccumulator()
     /// Within this window the same card is revised rather than replaced.
     private static let sameTopicWindow: TimeInterval = 90
-    /// Enough accumulated speech to be worth a suggestion. A couple of clauses
-    /// is not a thought.
-    private static let minimumAccumulatedCharacters = 220
 
     // MARK: - Init
 
@@ -134,16 +126,29 @@ final class MeetingCopilotService: ObservableObject {
         // Reschedule on every new fragment. The insight fires when speech stops
         // — or when the ceiling is reached, so a long monologue is not ignored.
         self.pendingInsightTask?.cancel()
+
         let since = self.lastInsightAt ?? self.accumulationStartedAt ?? Date()
-        let waitedLongEnough = Date().timeIntervalSince(since) >= Self.maxSilenceWait
+        let pendingCharacters = self.turnsSinceLastInsight.joined(separator: " ").count
+        let decision = self.accumulator.decide(
+            accumulatedCharacters: pendingCharacters + self.openInsightQuotes.joined().count,
+            elapsed: Date().timeIntervalSince(since)
+        )
 
-        if waitedLongEnough {
+        switch decision {
+        case .hold:
+            // Still reschedule: the speaker may stop before the ceiling, and a
+            // pause with enough material should not wait for the ceiling.
+            self.scheduleInsight(at: time)
+        case .waitForPause:
+            self.scheduleInsight(at: time)
+        case .fireNow:
             await self.fireAccumulatedInsight(at: time)
-            return
         }
+    }
 
-        self.pendingInsightTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.turnPause * 1_000_000_000))
+    private func scheduleInsight(at time: MeetingMediaTime) {
+        self.pendingInsightTask = Task { [weak self, pause = self.accumulator.turnPause] in
+            try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await self?.fireAccumulatedInsight(at: time)
         }
@@ -170,9 +175,9 @@ final class MeetingCopilotService: ObservableObject {
 
         // Hold until there is enough speech to reason about. Without this the
         // card churns on a clause at a time.
-        guard quoted.count >= Self.minimumAccumulatedCharacters else {
+        guard quoted.count >= self.accumulator.minimumCharacters else {
             DebugLogger.shared.log(
-                "MeetingCopilot: holding, \(quoted.count)/\(Self.minimumAccumulatedCharacters) chars accumulated",
+                "MeetingCopilot: holding, \(quoted.count)/\(self.accumulator.minimumCharacters) chars accumulated",
                 level: .info,
                 source: "MeetingCopilot"
             )
@@ -220,7 +225,25 @@ final class MeetingCopilotService: ObservableObject {
 
     func runQuickAction(_ request: CopilotPromptBuilder.Request) async {
         let anchor = self.context.latestEntry?.time ?? MeetingMediaTime(value: 0, timescale: 600)
-        await self.produceInsight(request, anchor: anchor, quoted: self.context.latestEntry?.text ?? "")
+        await self.produceInsight(request, anchor: anchor, quoted: self.recentStretch())
+    }
+
+    /// The stretch of conversation a manual action should act on.
+    ///
+    /// Not just the newest slice: transcription arrives in fragments, and a user
+    /// pressing Clarify means "the thing we were just talking about", not "the
+    /// last four seconds". Combines the open card's accumulated quotes with
+    /// anything said since, falling back to the context window.
+    private func recentStretch() -> String {
+        let pending = self.openInsightQuotes + self.turnsSinceLastInsight
+        let joined = pending.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !joined.isEmpty { return joined }
+
+        // Nothing accumulated yet — fall back to the tail of the window.
+        return self.context.entries
+            .suffix(4)
+            .map(\.text)
+            .joined(separator: " ")
     }
 
     func sendChatMessage(_ question: String) async {
@@ -300,8 +323,13 @@ final class MeetingCopilotService: ObservableObject {
         defer { isBusy = false }
 
         do {
-            let text = try await engine.run(request, profile: profile, context: self.context)
-            insight.body = text
+            if case .webSearch = request {
+                let result = try await self.runWebSearch(profile: profile)
+                insight.body = result.text
+                insight.sources = result.sources
+            } else {
+                insight.body = try await self.engine.run(request, profile: profile, context: self.context)
+            }
             insight.state = .complete
         } catch CopilotInsightError.cancelled {
             // Superseded by a fresher request; drop the card rather than leave a
@@ -319,6 +347,93 @@ final class MeetingCopilotService: ObservableObject {
         self.schedulePersist()
     }
 
+    // MARK: - Notes and Briefing
+
+    /// Extracts decisions, action items, and open questions from the meeting so
+    /// far, merging them into what is already recorded (`FR-018`).
+    ///
+    /// Runs on demand rather than on a timer: note extraction is a full model
+    /// call, and doing it on every turn would compete with the suggestions the
+    /// user is actually watching.
+    func extractNotes() async {
+        guard let profile = activeProfile, self.unavailableReason == nil else { return }
+        let anchor = self.context.latestEntry?.time ?? MeetingMediaTime(value: 0, timescale: 600)
+
+        self.isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let response = try await engine.run(.notes, profile: profile, context: self.context)
+            let parsed = CopilotNoteExtractor.parse(response, anchor: anchor)
+            self.notes = CopilotNoteExtractor.merge(parsed, into: self.notes)
+            self.schedulePersist()
+        } catch {
+            DebugLogger.shared.log(
+                "MeetingCopilot: note extraction failed — \(error.localizedDescription)",
+                level: .warning,
+                source: "MeetingCopilot"
+            )
+        }
+    }
+
+    /// Generates a briefing with the given profile.
+    ///
+    /// Multiple briefings coexist, identified by profile and time (`FR-023`),
+    /// and each records whether it was built on the authoritative transcript or
+    /// on provisional text (`FR-022`).
+    @discardableResult
+    func generateBriefing(using profile: MeetingCopilotProfile) async -> CopilotBriefing? {
+        guard self.unavailableReason == nil else { return nil }
+
+        self.isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let body = try await engine.run(.briefing, profile: profile, context: self.context)
+            let briefing = CopilotBriefing(
+                profileID: profile.id,
+                profileName: profile.name,
+                body: body,
+                basis: self.hasFinalTranscript ? .finalTranscript : .provisionalTranscript
+            )
+            self.briefings.append(briefing)
+            await self.persist()
+            return briefing
+        } catch {
+            DebugLogger.shared.log(
+                "MeetingCopilot: briefing failed — \(error.localizedDescription)",
+                level: .warning,
+                source: "MeetingCopilot"
+            )
+            return nil
+        }
+    }
+
+    /// Runs a grounded web search.
+    ///
+    /// The only copilot path that reaches beyond the configured model, so it
+    /// refuses loudly when the provider cannot ground rather than falling back
+    /// to an ungrounded answer dressed as a search (`FR-013`).
+    private func runWebSearch(profile: MeetingCopilotProfile) async throws -> CopilotWebSearchService.Result {
+        let route = CopilotProviderRoute.resolve(choice: self.providerChoice)
+        guard let service = CopilotWebSearchService.make(route: route) else {
+            throw CopilotWebSearchService.Failure.unsupportedProvider
+        }
+
+        return try await service.search(
+            systemPrompt: CopilotPromptBuilder.systemPrompt(
+                for: .webSearch,
+                profile: profile,
+                language: self.language
+            ),
+            question: CopilotPromptBuilder.userPrompt(
+                for: .webSearch,
+                context: self.context,
+                language: self.language
+            )
+        )
+    }
+
     /// Provider problems are shown on the card and nowhere else. Capture,
     /// transcription, and the session carry on untouched (`FR-012`).
     private static func userFacingMessage(for error: Error) -> String {
@@ -327,6 +442,12 @@ final class MeetingCopilotService: ObservableObject {
             return "No AI provider is configured for the copilot."
         case CopilotInsightError.emptyResponse:
             return "The provider returned an empty response."
+        case CopilotWebSearchService.Failure.unsupportedProvider:
+            return "Web search needs a Gemini provider. Configure one under AI Enhancement."
+        case CopilotWebSearchService.Failure.emptyResponse:
+            return "The search returned nothing usable."
+        case let CopilotWebSearchService.Failure.requestFailed(detail):
+            return detail
         case CopilotInsightError.cancelled:
             return "Superseded by a newer request."
         default:
@@ -381,6 +502,38 @@ final class MeetingCopilotService: ObservableObject {
         self.chatMessages = artifacts.chatMessages
         self.notes = artifacts.notes
         self.briefings = artifacts.briefings
+    }
+
+    /// Loads a finished meeting for review: its saved artifacts plus a context
+    /// window built from the authoritative transcript.
+    ///
+    /// This is what lets chat and briefing work on a meeting that ended
+    /// (`T037`, `FR-022`). The window is filled from final segments rather than
+    /// live ones, so answers cite what the offline pipeline actually produced.
+    func loadForReview(session: MeetingSession, artifacts: CopilotSessionArtifacts?) {
+        if let artifacts {
+            self.restore(artifacts)
+        }
+
+        self.context.reset()
+        let speakerNames = Dictionary(
+            uniqueKeysWithValues: session.speakers.map { ($0.id, $0.displayName) }
+        )
+        for segment in session.transcriptSegments.sorted(by: { $0.start < $1.start }) {
+            let speaker = segment.speakerID.flatMap { speakerNames[$0] } ?? "Speaker"
+            self.context.append(
+                speaker: speaker,
+                text: segment.text,
+                time: segment.start,
+                isLocalUser: false
+            )
+        }
+    }
+
+    /// Whether the authoritative transcript is available, which decides if a
+    /// briefing is final or preliminary (`FR-022`).
+    var hasFinalTranscript: Bool {
+        !self.context.isEmpty
     }
 }
 

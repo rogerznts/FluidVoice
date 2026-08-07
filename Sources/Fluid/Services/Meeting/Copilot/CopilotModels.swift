@@ -27,6 +27,16 @@ nonisolated enum CopilotProviderChoice: String, Codable, CaseIterable, Sendable 
     }
 }
 
+// MARK: - Web Source
+
+/// A page the model actually consulted, surfaced so a claim can be checked
+/// rather than trusted.
+nonisolated struct CopilotWebSource: Codable, Identifiable, Equatable, Sendable {
+    var id: String { self.uri }
+    var uri: String
+    var title: String
+}
+
 // MARK: - Insight
 
 /// What produced an entry in the copilot stream.
@@ -39,6 +49,9 @@ nonisolated enum CopilotInsightOrigin: String, Codable, Sendable {
     case actionRecap
     /// The user pressed Look up.
     case actionLookUp
+    /// The user pressed Search web — the only path that leaves the machine for
+    /// anything other than the model itself.
+    case actionWebSearch
 }
 
 /// How a profile wants its insights written (DEC-COP-002, FR-033).
@@ -79,6 +92,8 @@ nonisolated struct CopilotInsight: Codable, Identifiable, Equatable, Sendable {
     var state: CopilotInsightState
     /// User-facing failure text. Never a raw provider error.
     var errorMessage: String?
+    /// Pages consulted, when this insight came from a grounded web search.
+    var sources: [CopilotWebSource]
     var createdAt: Date
 
     init(
@@ -92,6 +107,7 @@ nonisolated struct CopilotInsight: Codable, Identifiable, Equatable, Sendable {
         body: String = "",
         state: CopilotInsightState = .pending,
         errorMessage: String? = nil,
+        sources: [CopilotWebSource] = [],
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -104,7 +120,31 @@ nonisolated struct CopilotInsight: Codable, Identifiable, Equatable, Sendable {
         self.body = body
         self.state = state
         self.errorMessage = errorMessage
+        self.sources = sources
         self.createdAt = createdAt
+    }
+
+    /// Custom decoding so insights written before web search still load:
+    /// `sources` simply did not exist then.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(CopilotInsightID.self, forKey: .id)
+        self.anchor = try container.decode(MeetingMediaTime.self, forKey: .anchor)
+        self.origin = try container.decode(CopilotInsightOrigin.self, forKey: .origin)
+        self.format = try container.decode(CopilotInsightFormat.self, forKey: .format)
+        self.profileID = try container.decode(CopilotProfileID.self, forKey: .profileID)
+        self.situation = try container.decode(String.self, forKey: .situation)
+        self.quotedContext = try container.decode(String.self, forKey: .quotedContext)
+        self.body = try container.decode(String.self, forKey: .body)
+        self.state = try container.decode(CopilotInsightState.self, forKey: .state)
+        self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        self.sources = try container.decodeIfPresent([CopilotWebSource].self, forKey: .sources) ?? []
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, anchor, origin, format, profileID, situation
+        case quotedContext, body, state, errorMessage, sources, createdAt
     }
 }
 

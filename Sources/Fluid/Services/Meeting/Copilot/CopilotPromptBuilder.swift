@@ -14,7 +14,11 @@ nonisolated enum CopilotPromptBuilder {
         case clarify
         case recap
         case lookUp
+        /// Grounded search against the open internet.
+        case webSearch
         case chat(question: String)
+        /// Structured notes: decisions, action items, open questions.
+        case notes
         case briefing
 
         var origin: CopilotInsightOrigin? {
@@ -23,7 +27,8 @@ nonisolated enum CopilotPromptBuilder {
             case .clarify: return .actionClarify
             case .recap: return .actionRecap
             case .lookUp: return .actionLookUp
-            case .chat, .briefing: return nil
+            case .webSearch: return .actionWebSearch
+            case .chat, .briefing, .notes: return nil
             }
         }
     }
@@ -90,10 +95,31 @@ nonisolated enum CopilotPromptBuilder {
         switch request {
         case .recap, .briefing:
             return ""
+        case .notes:
+            // Parsed line by line, so the shape is not cosmetic.
+            return language == .portuguese
+                ? """
+                Liste apenas o que foi efetivamente dito, uma linha por item, no formato:
+                DECISAO: <texto>
+                PENDENCIA: <texto>
+                PERGUNTA: <texto>
+                Se não houver nada de um tipo, omita. Se não houver nada de nenhum, responda VAZIO.
+                """
+                : """
+                List only what was actually said, one line per item, in the format:
+                DECISION: <text>
+                ACTION: <text>
+                QUESTION: <text>
+                Omit a type when there is nothing for it. If there is nothing at all, answer EMPTY.
+                """
         case .chat:
             return language == .portuguese
                 ? "Responda de forma direta e curta. Quem pergunta está no meio de uma reunião."
                 : "Answer directly and briefly. The person asking is in the middle of a meeting."
+        case .webSearch:
+            return language == .portuguese
+                ? "Responda em no máximo 4 frases, citando o que as fontes dizem. Se as fontes contradizem o que foi falado na reunião, diga isso explicitamente."
+                : "Answer in at most 4 sentences, citing what the sources say. If the sources contradict what was said in the meeting, say so explicitly."
         case .automaticInsight, .clarify, .lookUp:
             break
         }
@@ -183,8 +209,8 @@ nonisolated enum CopilotPromptBuilder {
 
         case .clarify:
             return isPortuguese
-                ? "\(transcript)\n\nExplique de forma simples o último ponto discutido."
-                : "\(transcript)\n\nExplain the last point discussed, in plain terms."
+                ? "\(transcript)\n\nExplique de forma simples o trecho mais recente acima — o assunto que está sendo tratado agora, não apenas a última frase."
+                : "\(transcript)\n\nExplain the most recent stretch above in plain terms — the topic being discussed now, not just the final sentence."
 
         case .recap:
             return isPortuguese
@@ -192,13 +218,22 @@ nonisolated enum CopilotPromptBuilder {
                 : "\(transcript)\n\nSummarise what has been covered so far, organised by topic."
 
         case .lookUp:
-            let latest = context.latestEntry?.text ?? ""
             return isPortuguese
-                ? "\(transcript)\n\nExplique os termos ou conceitos que apareceram em:\n\"\(latest)\""
-                : "\(transcript)\n\nExplain the terms or concepts that came up in:\n\"\(latest)\""
+                ? "\(transcript)\n\nExplique os termos, nomes ou conceitos que apareceram no trecho mais recente acima."
+                : "\(transcript)\n\nExplain the terms, names, or concepts that came up in the most recent stretch above."
+
+        case .webSearch:
+            return isPortuguese
+                ? "\(transcript)\n\nPesquise na internet sobre o trecho mais recente acima: verifique as afirmações feitas e traga informação adicional relevante."
+                : "\(transcript)\n\nSearch the web about the most recent stretch above: check the claims made and bring relevant additional information."
 
         case let .chat(question):
             return "\(transcript)\n\n\(isPortuguese ? "Pergunta" : "Question"): \(question)"
+
+        case .notes:
+            return isPortuguese
+                ? "\(transcript)\n\nExtraia decisões, pendências e perguntas em aberto do trecho acima."
+                : "\(transcript)\n\nExtract decisions, action items, and open questions from the stretch above."
 
         case .briefing:
             return isPortuguese
@@ -222,8 +257,12 @@ nonisolated enum CopilotPromptBuilder {
             return isPortuguese ? "Recapitulação" : "Recap"
         case .lookUp:
             return isPortuguese ? "Consulta" : "Look-up"
+        case .webSearch:
+            return isPortuguese ? "Pesquisa na web" : "Web search"
         case .chat:
             return isPortuguese ? "Resposta" : "Answer"
+        case .notes:
+            return isPortuguese ? "Notas" : "Notes"
         case .briefing:
             return isPortuguese ? "Briefing" : "Briefing"
         }

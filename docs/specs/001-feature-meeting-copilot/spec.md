@@ -176,7 +176,8 @@ Encerrada a reunião, o usuário escolhe um perfil de briefing e recebe um docum
 - **FR-010**: O prompt do perfil ativo DEVE determinar o comportamento do insight. Trocar o perfil durante a sessão afeta apenas os insights seguintes.
 - **FR-011**: O sistema DEVE limitar a taxa de chamadas ao provider e cancelar requisições obsoletas quando a conversa avança.
 - **FR-012**: Falhas de provider DEVEM ser exibidas de forma discreta e não podem escalar para falha de sessão.
-- **FR-013**: O sistema NÃO DEVE afirmar que consultou fontes externas. A ação **Pesquisar** responde a partir do conhecimento do modelo e declara essa limitação.
+- **FR-013**: A ação **Look up** responde a partir do conhecimento do modelo e DEVE declarar que não consultou fontes externas.
+- **FR-013b**: A ação **Search web** DEVE realizar busca real na internet e DEVE exibir as fontes consultadas. Quando o provedor não suportar busca ancorada, a ação DEVE falhar com mensagem explícita, nunca responder de memória se passando por pesquisa (`DEC-COP-003`).
 
 ### 5.4 Perfis de copiloto
 
@@ -253,7 +254,7 @@ Todas as entidades pertencem a uma `MeetingSession` existente e seguem o mesmo v
 | A-01 | Insights são automáticos por padrão, com opção de passar para manual | As telas de referência mostram reação autônoma à fala do interlocutor |
 | A-02 | Gatilho por fim de turno com janela deslizante | Mais estável que gatilho por intervalo fixo; alinhado ao modelo de segmentos existente |
 | A-03 | Retenção herda a política de áudio do PRD upstream (`OPEN-001`, 7 dias) | Evita criar uma segunda política de retenção divergente |
-| A-04 | **Pesquisar** não faz busca na web no V1 | Não há infraestrutura de busca no app; prometer o contrário seria falso |
+| A-04 | ~~**Pesquisar** não faz busca na web no V1~~ — **revogada em 2026-08-07** por `DEC-COP-003` | Substituída: existem agora duas ações distintas, `Look up` (memória do modelo) e `Search web` (busca real com fontes) |
 | A-05 | Transcrição provisória usa o provider de ASR streaming já embarcado | Evita introduzir um segundo motor de ASR |
 | A-06 | Um único painel de copiloto por sessão | O coordinator já permite apenas uma sessão ativa |
 | A-07 | Perfis embarcados são editáveis, não fixos | Consistente com o comportamento dos perfis de ditado existentes |
@@ -265,6 +266,12 @@ Todas as entidades pertencem a uma `MeetingSession` existente e seguem o mesmo v
 - **DEC-COP-001 — Idiomas do V1: português e inglês.** Revoga `DEC-001` (English-only) do PRD upstream. A transcrição ao vivo usa um modelo de ASR multilíngue já embarcado; os prompts dos perfis embarcados existem em pt-BR e en. O `languageCode` da sessão, que já é persistido, seleciona o conjunto de prompts. Consequência aceita: latência ligeiramente maior que o Parakeet Flash só-inglês.
 
 - **DEC-COP-002 — Formato do insight é configurável por perfil.** Cada `MeetingCopilotProfile` declara seu formato de saída: resposta redigida pronta para ser dita, ou tópicos de apoio. Perfis embarcados adotam o formato adequado ao seu contexto, e o usuário pode alterá-lo. Consequência: o formato de resposta pronta permanece disponível, e a responsabilidade pelo uso adequado em processos seletivos é do usuário — o produto não avalia contexto nem política de terceiros.
+
+- **DEC-COP-003 — Busca real na internet, via Gemini.** Revoga a premissa `A-04`. A ação **Search web** usa a API nativa do Gemini com `google_search`, porque o endpoint OpenAI-compatível que o app utiliza não expõe grounding. Exibe as fontes consultadas, sem as quais não há como distinguir uma afirmação verificada de um chute fluente.
+
+  **Consequência de privacidade, deliberada:** esta é a única ação que envia trecho da reunião para fora do provedor de IA escolhido — o texto vai ao Google Search. É opt-in por clique, nunca automática, e o tooltip do botão declara isso. `FR-025` a `FR-028` seguem valendo para todo o resto.
+
+  **Consequência de portabilidade:** só funciona com Gemini. Com outro provedor a ação falha com mensagem explícita, em vez de responder de memória fingindo ter pesquisado.
 
 ### 9.1 Nota de contexto de uso
 
