@@ -111,13 +111,19 @@ nonisolated enum CopilotPromptBuilder {
             """
         case (.supportingPoints, .portuguese):
             return """
-            Responda em no máximo 4 tópicos curtos, um por linha, começando com "- ". \
-            São pontos de apoio para a pessoa formular a própria resposta, não uma fala pronta.
+            Escreva no máximo 3 frases curtas com a leitura mais útil do momento: o que está \
+            realmente em jogo, uma tensão ou contradição que valha notar, ou a pergunta que \
+            ninguém fez ainda. Só use lista quando forem mesmo itens paralelos.
+
+            Não resuma o que acabou de ser dito — quem está na reunião ouviu. Acrescente algo.
             """
         case (.supportingPoints, .english):
             return """
-            Answer in at most 4 short bullets, one per line, starting with "- ". \
-            These are points to build an answer from, not words to read aloud.
+            Write at most 3 short sentences with the most useful read on the moment: what is \
+            actually at stake, a tension or contradiction worth noticing, or the question \
+            nobody has asked yet. Use a list only when the items are genuinely parallel.
+
+            Do not summarise what was just said — the person heard it. Add something.
             """
         }
     }
@@ -167,10 +173,12 @@ nonisolated enum CopilotPromptBuilder {
 
         switch request {
         case .automaticInsight:
-            let latest = context.latestEntry?.text ?? ""
+            // The whole recent stretch, not just the last fragment: live
+            // transcription arrives in slices, and a slice on its own is half a
+            // thought.
             let instruction = isPortuguese
-                ? "A última fala foi:\n\"\(latest)\"\n\nResponda a ela."
-                : "The most recent thing said was:\n\"\(latest)\"\n\nRespond to it."
+                ? "Considere os últimos turnos acima como um único trecho da conversa e traga a leitura mais útil sobre ele."
+                : "Treat the last few turns above as one stretch of conversation, and give the most useful read on it."
             return "\(transcript)\n\n\(instruction)"
 
         case .clarify:

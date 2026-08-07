@@ -9,7 +9,9 @@ extension SettingsStore {
         case above
         case below
 
-        var id: String { self.rawValue }
+        var id: String {
+            self.rawValue
+        }
 
         var displayName: String {
             switch self {
@@ -27,7 +29,9 @@ extension SettingsStore {
         case automatic
         case manual
 
-        var id: String { self.rawValue }
+        var id: String {
+            self.rawValue
+        }
 
         var displayName: String {
             switch self {
@@ -40,6 +44,38 @@ extension SettingsStore {
     }
 
     // MARK: - Preferences
+
+    /// Master switch for the copilot. Off by default: recording a meeting must
+    /// not start sending anything anywhere without the user asking.
+    var isCopilotEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: MeetingCopilotKeys.enabled) }
+        set {
+            objectWillChange.send()
+            UserDefaults.standard.set(newValue, forKey: MeetingCopilotKeys.enabled)
+        }
+    }
+
+    /// Language used for meeting transcription and copilot prompts.
+    /// Defaults to English, matching the inherited behaviour.
+    var meetingLanguageCode: String {
+        get { UserDefaults.standard.string(forKey: MeetingCopilotKeys.language) ?? "en" }
+        set {
+            objectWillChange.send()
+            UserDefaults.standard.set(newValue, forKey: MeetingCopilotKeys.language)
+        }
+    }
+
+    /// Height of the expanded copilot panel, in points.
+    var copilotPanelHeight: CGFloat {
+        get {
+            let stored = UserDefaults.standard.double(forKey: MeetingCopilotKeys.panelHeight)
+            return stored > 0 ? CGFloat(stored) : 320
+        }
+        set {
+            objectWillChange.send()
+            UserDefaults.standard.set(Double(newValue), forKey: MeetingCopilotKeys.panelHeight)
+        }
+    }
 
     var copilotPanelPlacement: CopilotPanelPlacement {
         get {
@@ -109,7 +145,10 @@ extension SettingsStore {
 }
 
 private enum MeetingCopilotKeys {
+    static let enabled = "MeetingCopilotEnabled"
+    static let language = "MeetingLanguageCode"
     static let panelPlacement = "MeetingCopilotPanelPlacement"
+    static let panelHeight = "MeetingCopilotPanelHeight"
     static let panelCollapsed = "MeetingCopilotPanelCollapsed"
     static let insightTrigger = "MeetingCopilotInsightTrigger"
     static let defaultProfileID = "MeetingCopilotDefaultProfileID"

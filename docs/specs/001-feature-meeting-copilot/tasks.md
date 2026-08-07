@@ -152,13 +152,13 @@ Validações executadas:
 
 **Objetivo**: a superfície visível. Pode começar em paralelo à F3 com dados simulados.
 
-- [ ] **T024** [US1] Criar `UI/Meeting/Copilot/CopilotPanelView.swift`: container com posição acima/abaixo persistida e colapso sem afetar a gravação (`FR-005`, `FR-006`).
-- [ ] **T025** [US1] Criar `UI/Meeting/Copilot/CopilotStreamView.swift`: fluxo cronológico **virtualizado** — nunca uma árvore SwiftUI monolítica (`FR-008`, `PERF-004`, R-07).
-- [ ] **T026** [US1] Criar `UI/Meeting/Copilot/CopilotInsightCard.swift` seguindo as telas de referência: contexto detectado, citação do interlocutor, corpo do insight. Reusar tema e componentes existentes (`A11Y-009`).
-- [ ] **T027** [US1] Criar `UI/Meeting/Copilot/CopilotProfilePicker.swift`; troca de perfil afeta só insights seguintes e preserva a marcação dos anteriores (`FR-010`).
-- [ ] **T028** [US1] Hospedar o painel em `UI/MeetingTranscriptionView.swift` sem quebrar os estados de canvas existentes (setup, gravação, processamento, resultado, interrompido).
-- [ ] **T029** [US1] Distinguir visualmente texto provisório de final (`FR-004`).
-- [ ] **T030** [P] [US1] Acessibilidade do painel: navegação completa por teclado, ordem lógica de VoiceOver, sem depender de cor isolada (`A11Y-001`, `A11Y-003`, `A11Y-004`).
+- [x] **T024** [US1] Criar `UI/Meeting/Copilot/CopilotPanelView.swift`: container com posição acima/abaixo persistida e colapso sem afetar a gravação (`FR-005`, `FR-006`).
+- [x] **T025** [US1] Criar `UI/Meeting/Copilot/CopilotStreamView.swift`: fluxo cronológico **virtualizado** — nunca uma árvore SwiftUI monolítica (`FR-008`, `PERF-004`, R-07).
+- [x] **T026** [US1] Criar `UI/Meeting/Copilot/CopilotInsightCard.swift` seguindo as telas de referência: contexto detectado, citação do interlocutor, corpo do insight. Reusar tema e componentes existentes (`A11Y-009`).
+- [x] **T027** [US1] Criar `UI/Meeting/Copilot/CopilotProfilePicker.swift`; troca de perfil afeta só insights seguintes e preserva a marcação dos anteriores (`FR-010`).
+- [x] **T028** [US1] Hospedar o painel em `UI/MeetingTranscriptionView.swift` sem quebrar os estados de canvas existentes (setup, gravação, processamento, resultado, interrompido).
+- [x] **T029** [US1] Distinguir visualmente texto provisório de final (`FR-004`).
+- [x] **T030** [P] [US1] Acessibilidade do painel: navegação completa por teclado, ordem lógica de VoiceOver, sem depender de cor isolada (`A11Y-001`, `A11Y-003`, `A11Y-004`).
 
 - [x] **T030b** [US1] **Dívida herdada — restaurar virtualização do transcript.** A correção do travamento (ver "Correção de bug herdado", abaixo) trocou `LazyVStack` por `VStack` em `MeetingResultCanvas`, removendo a virtualização. Restaurar `LazyVStack` com altura de linha estável, atendendo `PERF-004` e `FR-008`. **Bloqueia T025**, que constrói o fluxo virtualizado do copiloto sobre o mesmo padrão.
 
@@ -179,6 +179,47 @@ Validações executadas:
   Verificado à mão contra os três fixtures (3, 135 e 1200 segmentos): abertura rápida, rolagem fluida e scroll imóvel com o mouse parado sobre o texto.
 
 **Checkpoint F4**: US1 completa e demonstrável de ponta a ponta.
+
+### Registro de execução F4 — 2026-08-06
+
+Primeira fase validada em uso real, e a mais cara: **nove correções** depois do "pronto", todas encontradas rodando o app.
+
+Arquivos novos em `UI/Meeting/Copilot/`: `CopilotPanelView`, `CopilotStreamView`, `CopilotInsightCard` (+ `CopilotChatBubble`), `CopilotProfilePicker`.
+
+Entregue além das tarefas, por necessidade de tornar a fase testável:
+
+- **Toggle do copiloto e seletor de provider** no setup (antecipa parte de T046). Sem eles nada ligava `transcriptMode = .live` e a fase era invisível.
+- **Seletor de idioma** — `Language` era texto fixo `English`. `DEC-COP-001` estava implementada só no modelo; faltavam três guardas exigindo `== "en"` em `MeetingCaptureConfiguration.validate()`, `MeetingProcessingPipeline.process()` e a mensagem de erro.
+- **Exclusão de reunião** com confirmação, `MeetingSessionStore.deleteSession` e `removeFromIndex`.
+- **Painel redimensionável** por arraste, com alternativa por teclado.
+
+Bugs corrigidos, na ordem em que apareceram:
+
+1. `PrivateFeatures.privateAIProvider` é `false` no build público — o padrão `.local` é inatingível neste fork
+2. Copiloto desistia em silêncio sem provider; agora o painel aparece e explica
+3. `startCopilot` rodava **depois** de `capture.start()`, e o engine passa o sink aos runtimes ao criá-los — o sink nunca chegava
+4. Sink instalado dentro de um `Task` solto, sem ordem garantida; virou `await`
+5. `delegate` do tap era `weak` e o bridge era criado inline — desalocado imediatamente, toda transcrição caía em nulo
+6. Três guardas de idioma bloqueando pt-BR
+7. Debounce de 2,5s **menor** que o intervalo de transcrição (~3,5s): nunca esperava nada, todo fragmento disparava
+8. Teto de fala contínua comparava contra `lastInsightAt`, `nil` antes do primeiro insight — com fala contínua nada disparava nunca
+9. Citação do cartão mostrava só o último fragmento em vez do trecho acumulado
+
+Ajustes de comportamento pedidos na validação:
+
+- Insight espera pausa real de 7 s, com teto de 20 s e mínimo de 220 caracteres acumulados
+- Cartão é **revisado no lugar** enquanto o assunto continua (janela de 90 s), em vez de empilhar um por fragmento
+- Prompt de `supportingPoints` reescrito: pede leitura do momento, não lista do que acabou de ser dito
+- Buffer do tap de 64 → 512 chunks; o pump drena após cada passagem (o selo "Degraded" era perda real de áudio)
+
+Validações executadas:
+
+- `./build.sh unsigned` → `** BUILD SUCCEEDED **`
+- `swiftlint --strict` → `0 violations in 180 files`
+- **Validação manual em reunião real**, em pt-BR, com provider Gemini: cartões coerentes, citação acumulada, painel redimensionável, exclusão funcionando
+- `xcodebuild test` → segue sem executar neste ambiente
+
+**Lacuna de teste identificada:** os bugs 3 a 8 são de fiação e de aritmética temporal, e nenhum dos 24 testes da F3 os pegaria — todos exercitam lógica pura. Falta um teste do `MeetingCopilotService` com relógio e transcrição simulados. Enquanto ele não existir, a validação manual é o único mecanismo real de verificação desta feature.
 
 ---
 

@@ -68,7 +68,9 @@ nonisolated struct MeetingSpeakerEmbeddingIndex: Sendable {
             else { return nil }
             return (prototype.speakerID, distance)
         }.sorted {
-            if $0.1 == $1.1 { return $0.0.uuidString < $1.0.uuidString }
+            if $0.1 == $1.1 {
+                return $0.0.uuidString < $1.0.uuidString
+            }
             return $0.1 < $1.1
         }
         guard let closest = candidates.first,
@@ -157,7 +159,9 @@ nonisolated enum MeetingLocalSpeakerEvidenceSelector {
         let ranked = cleanDurationByCluster
             .filter { $0.value >= 1 && prototypeSpeakerIDs.contains($0.key) }
             .sorted {
-                if $0.value == $1.value { return $0.key.uuidString < $1.key.uuidString }
+                if $0.value == $1.value {
+                    return $0.key.uuidString < $1.key.uuidString
+                }
                 return $0.value > $1.value
             }
         guard let strongest = ranked.first else { return nil }
@@ -277,7 +281,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             isLocalUser: Bool,
             clusterID: String?
         ) -> SessionSpeakerID {
-            if let existing = self.speakerIDByKey[key] { return existing }
+            if let existing = self.speakerIDByKey[key] {
+                return existing
+            }
             let id = MeetingProcessingPipeline.stableUUID("speaker:\(key)")
             self.speakerIDByKey[key] = id
             self.speakers.append(MeetingSessionSpeaker(
@@ -368,7 +374,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
-        guard session.languageCode == "en" else {
+        guard MeetingSession.supportedLanguageCodes.contains(session.languageCode) else {
             throw MeetingProcessingError.unsupportedLanguage
         }
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
@@ -467,7 +473,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
         progress(.finalizing)
         accumulator.segments.sort {
-            if $0.start == $1.start { return $0.sourceTrackID.uuidString < $1.sourceTrackID.uuidString }
+            if $0.start == $1.start {
+                return $0.sourceTrackID.uuidString < $1.sourceTrackID.uuidString
+            }
             return $0.start < $1.start
         }
         guard !accumulator.segments.isEmpty else { throw MeetingProcessingError.noSpeech }
@@ -929,7 +937,7 @@ nonisolated enum MeetingProcessingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedLanguage:
-            return "Meeting transcription currently supports English only."
+            return "Meeting transcription supports English and Portuguese."
         case .noRecoverableAudio:
             return "No finalized meeting audio is available to transcribe."
         case .dictationActive:

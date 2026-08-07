@@ -480,7 +480,9 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         let result = await withCheckedContinuation { continuation in
             let completion = MeetingOneShotCompletion(continuation)
             self.controlQueue.async { [session] in
-                if session.isRunning { session.stopRunning() }
+                if session.isRunning {
+                    session.stopRunning()
+                }
                 completion.resume(.success)
             }
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 3) {

@@ -23,7 +23,7 @@ Camada de copiloto sobre a base de Meeting Transcription: transcrição ao vivo,
 
 - [spec.md](./specs/001-feature-meeting-copilot/spec.md) — 5 user stories, 36 requisitos, 8 critérios de sucesso
 - [plan.md](./specs/001-feature-meeting-copilot/plan.md) — 5 decisões de arquitetura, mapa de arquivos, 8 riscos
-- [tasks.md](./specs/001-feature-meeting-copilot/tasks.md) — 56 tarefas em 7 fases; **Fases 1–3 concluídas** (fundação, transcrição ao vivo, motor de insights), 24/57
+- [tasks.md](./specs/001-feature-meeting-copilot/tasks.md) — 56 tarefas em 7 fases; **Fases 1–4 concluídas**, 31/57 — copiloto validado em reunião real
 
 ## Archived Specs
 

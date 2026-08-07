@@ -145,9 +145,9 @@ nonisolated enum MeetingLiveAudioConverter {
             let frames = min(frameCount, floatCount / channelCount)
             var result = [Float](repeating: 0, count: frames)
             let scale = 1.0 / Float(channelCount)
-            for frame in 0 ..< frames {
+            for frame in 0..<frames {
                 var sum: Float = 0
-                for channel in 0 ..< channelCount {
+                for channel in 0..<channelCount {
                     let index = isInterleaved
                         ? frame * channelCount + channel
                         : channel * frames + frame

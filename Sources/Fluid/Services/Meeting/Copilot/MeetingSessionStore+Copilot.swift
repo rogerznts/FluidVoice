@@ -57,6 +57,24 @@ extension MeetingSessionStore: MeetingCopilotArtifactStoring {
     }
 }
 
+// MARK: - Session Deletion
+
+extension MeetingSessionStore {
+    /// Removes a meeting and everything it owns: manifest, audio tracks, and
+    /// copilot artifacts (`FR-021`, `PRIV-015`).
+    ///
+    /// Deliberately not "delete audio only" — that is a separate action with
+    /// different semantics, since a transcript stays useful after its audio is
+    /// gone (`FR-020`).
+    func deleteSession(id: MeetingSessionID) throws {
+        let directory = self.sessionDirectoryURL(for: id)
+        if self.fileSystem.manager.fileExists(atPath: directory.path) {
+            try self.fileSystem.manager.removeItem(at: directory)
+        }
+        try self.removeFromIndex(id)
+    }
+}
+
 // MARK: - Errors
 
 nonisolated enum MeetingCopilotArtifactStoreError: Error, Equatable {

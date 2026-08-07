@@ -6,15 +6,15 @@ import Foundation
 
 nonisolated struct LiveTranscriptionTapConfiguration: Sendable {
     /// ASR input rate. 16 kHz mono is what every bundled provider expects.
-    static let targetSampleRate: Double = 16000
+    static let targetSampleRate: Double = 16_000
 
     /// How much speech accumulates before a transcription pass runs. Short
     /// enough to stay responsive, long enough that the model has real context.
-    var windowDuration: TimeInterval = 6.0
+    var windowDuration: TimeInterval = 3.5
 
     /// Minimum gap between passes, so a talkative meeting cannot spin the model
     /// continuously (`FR-011`).
-    var minimumInterval: TimeInterval = 2.0
+    var minimumInterval: TimeInterval = 1.0
 
     /// Below this RMS a window counts as silence and never reaches the model
     /// (`FR-009`: no speech, no call).
@@ -22,7 +22,10 @@ nonisolated struct LiveTranscriptionTapConfiguration: Sendable {
 
     /// Ring capacity in captured chunks. Roughly a few seconds of audio; beyond
     /// it the consumer is too far behind for the extra audio to be useful.
-    var bufferCapacity: Int = 64
+    /// Sized for the worst case that actually happens: the pump blocks while a
+    /// transcription pass runs, and everything captured meanwhile has to fit.
+    /// 64 was not enough and showed up as a permanent "Degraded" badge.
+    var bufferCapacity: Int = 512
 }
 
 // MARK: - Delegate
@@ -59,7 +62,11 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
     private let configuration: LiveTranscriptionTapConfiguration
     private let providerFactory: @Sendable () async throws -> any TranscriptionProvider
     private let arbiter: MeetingASRAccessArbiter
-    private weak var delegate: (any LiveTranscriptionTapDelegate)?
+    /// Strong on purpose. The bridge that conforms to this holds the
+    /// coordinator weakly, so there is no cycle — and weak here meant the
+    /// bridge was deallocated the moment the tap was constructed, silently
+    /// dropping every transcription.
+    private var delegate: (any LiveTranscriptionTapDelegate)?
 
     private let buffer: MeetingLiveAudioBuffer
     private let stateLock = NSLock()
@@ -67,6 +74,7 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
     private var windowStart: [MeetingAudioTrackKind: MeetingMediaTime] = [:]
     private var windowEnd: [MeetingAudioTrackKind: MeetingMediaTime] = [:]
     private var reportedDrops = 0
+    private var unconvertibleBuffers = 0
 
     private var pumpTask: Task<Void, Never>?
 
@@ -98,7 +106,10 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
     /// Runs on the capture callback thread. Does the minimum: convert and
     /// append. No I/O, no `await`, no allocation beyond the sample copy.
     func receive(_ sampleBuffer: CMSampleBuffer, from kind: MeetingAudioTrackKind) {
-        guard let converted = MeetingLiveAudioConverter.monoSamples(from: sampleBuffer) else { return }
+        guard let converted = MeetingLiveAudioConverter.monoSamples(from: sampleBuffer) else {
+            self.countUnconvertibleBuffer(sampleBuffer)
+            return
+        }
         let presentationTime = MeetingLiveAudioConverter.presentationTime(of: sampleBuffer)
 
         self.buffer.append(
@@ -108,6 +119,31 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
                 kind: kind,
                 presentationTime: presentationTime
             )
+        )
+    }
+
+    /// Counts buffers the converter could not read, logging the first one with
+    /// its actual format. Silence here would look identical to silence in the
+    /// room.
+    private func countUnconvertibleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        self.stateLock.lock()
+        let isFirst = self.unconvertibleBuffers == 0
+        self.unconvertibleBuffers += 1
+        let total = self.unconvertibleBuffers
+        self.stateLock.unlock()
+
+        guard isFirst || total % 500 == 0 else { return }
+        var description = "unknown"
+        if let format = CMSampleBufferGetFormatDescription(sampleBuffer),
+           let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)
+        {
+            let f = asbd.pointee
+            description = "rate=\(f.mSampleRate) ch=\(f.mChannelsPerFrame) bits=\(f.mBitsPerChannel) flags=\(f.mFormatFlags)"
+        }
+        DebugLogger.shared.log(
+            "LiveTranscriptionTap: cannot convert audio buffer (\(total) so far) — \(description)",
+            level: .warning,
+            source: "MeetingCopilot"
         )
     }
 
@@ -151,13 +187,30 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
     private func pump() async {
         let intervalNanoseconds = UInt64(self.configuration.minimumInterval * 1_000_000_000)
 
+        var ticks = 0
         while !Task.isCancelled {
             self.drainBuffer()
             await self.reportDropsIfNeeded()
 
+            ticks += 1
+            if ticks % 5 == 0 {
+                self.stateLock.lock()
+                let pending = self.pendingSamples.map { "\($0.key.rawValue)=\($0.value.count)" }
+                    .sorted().joined(separator: " ")
+                self.stateLock.unlock()
+                DebugLogger.shared.log(
+                    "LiveTranscriptionTap: pending [\(pending.isEmpty ? "none" : pending)] dropped=\(self.buffer.dropped)",
+                    level: .info,
+                    source: "MeetingCopilot"
+                )
+            }
+
             for kind in self.readyWindows() {
                 guard !Task.isCancelled else { return }
                 await self.transcribeWindow(for: kind)
+                // Capture kept running while that awaited; take what piled up
+                // before sleeping, so the ring has room.
+                self.drainBuffer()
             }
 
             try? await Task.sleep(nanoseconds: intervalNanoseconds)
@@ -224,7 +277,14 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
         let outcome: String? = await self.arbiter.runLiveIfAvailable { [providerFactory] in
             do {
                 let provider = try await providerFactory()
-                guard provider.isReady else { return nil }
+                guard provider.isReady else {
+                    DebugLogger.shared.log(
+                        "LiveTranscriptionTap: ASR provider not ready; skipping window",
+                        level: .warning,
+                        source: "MeetingCopilot"
+                    )
+                    return nil
+                }
                 let result = try await provider.transcribeStreaming(samples)
                 let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : trimmed
@@ -239,7 +299,19 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
             }
         } ?? nil
 
-        guard let text = outcome else { return }
+        guard let text = outcome else {
+            DebugLogger.shared.log(
+                "LiveTranscriptionTap: window for \(kind.rawValue) produced no text",
+                level: .info,
+                source: "MeetingCopilot"
+            )
+            return
+        }
+        DebugLogger.shared.log(
+            "LiveTranscriptionTap: \(kind.rawValue) → \(text.prefix(40))…",
+            level: .info,
+            source: "MeetingCopilot"
+        )
         await self.delegate?.liveTranscription(didProduce: text, from: kind, start: start, end: end)
     }
 

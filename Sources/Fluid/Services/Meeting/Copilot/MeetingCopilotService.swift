@@ -20,6 +20,9 @@ final class MeetingCopilotService: ObservableObject {
     @Published private(set) var isBusy = false
     /// Set when the live transcript is degraded because audio was dropped.
     @Published private(set) var droppedAudioChunks = 0
+    /// Explains why the copilot cannot produce anything, when that is the case.
+    /// Shown in place of the stream rather than left blank.
+    @Published private(set) var unavailableReason: String?
 
     // MARK: - Dependencies
 
@@ -27,11 +30,47 @@ final class MeetingCopilotService: ObservableObject {
     private let language: CopilotSeedLanguage
     private let providerChoice: CopilotProviderChoice
     private let engine: CopilotInsightEngine
+    private let engineTrigger = CopilotInsightTrigger()
     private let store: any MeetingCopilotArtifactStoring
     private let profileStore: MeetingCopilotProfileStore
 
     private var context = CopilotContextWindow()
     private var persistTask: Task<Void, Never>?
+
+    /// Debounce for automatic insights.
+    ///
+    /// Live transcription arrives in ~3.5s slices, which are fragments of a
+    /// sentence, not turns. Reacting to each one produced suggestions about
+    /// half-finished thoughts. This waits for the speaker to actually pause.
+    private var pendingInsightTask: Task<Void, Never>?
+    /// Turns accumulated since the last insight, quoted together so the card
+    /// reflects a thought rather than a fragment.
+    private var turnsSinceLastInsight: [String] = []
+    private var lastInsightAt: Date?
+    /// When the current accumulation began. Without this the ceiling below has
+    /// nothing to measure against before the first insight, so continuous
+    /// speech kept cancelling the debounce and nothing ever fired.
+    private var accumulationStartedAt: Date?
+    /// Insight to update in place while the same topic continues, instead of
+    /// stacking a new card per fragment.
+    private var openInsightID: CopilotInsightID?
+    /// Everything quoted into the open card so far, so a revision shows the
+    /// whole stretch rather than only the newest fragment.
+    private var openInsightQuotes: [String] = []
+
+    /// How long the speaker must pause before a suggestion is produced.
+    ///
+    /// Must exceed the tap's transcription interval (~3.5s). At 2.5s it never
+    /// waited for anything: every slice arrived after the debounce had already
+    /// elapsed, so every fragment fired.
+    private static let turnPause: TimeInterval = 7
+    /// Ceiling for continuous speech, so a monologue still gets suggestions.
+    private static let maxSilenceWait: TimeInterval = 20
+    /// Within this window the same card is revised rather than replaced.
+    private static let sameTopicWindow: TimeInterval = 90
+    /// Enough accumulated speech to be worth a suggestion. A couple of clauses
+    /// is not a thought.
+    private static let minimumAccumulatedCharacters = 220
 
     // MARK: - Init
 
@@ -59,6 +98,7 @@ final class MeetingCopilotService: ObservableObject {
 
     deinit {
         self.persistTask?.cancel()
+        self.pendingInsightTask?.cancel()
     }
 
     // MARK: - Profile
@@ -82,19 +122,98 @@ final class MeetingCopilotService: ObservableObject {
     ) async {
         self.context.append(speaker: speaker, text: text, time: time, isLocalUser: isLocalUser)
 
+        guard self.unavailableReason == nil else { return }
         guard SettingsStore.shared.copilotInsightTrigger == .automatic else { return }
-        guard await self.engine.shouldFireAutomatically(
-            text: text,
-            isLocalUser: isLocalUser,
-            at: time
-        ) else { return }
+        guard !isLocalUser else { return }
 
+        self.turnsSinceLastInsight.append(text)
+        if self.accumulationStartedAt == nil {
+            self.accumulationStartedAt = Date()
+        }
+
+        // Reschedule on every new fragment. The insight fires when speech stops
+        // — or when the ceiling is reached, so a long monologue is not ignored.
+        self.pendingInsightTask?.cancel()
+        let since = self.lastInsightAt ?? self.accumulationStartedAt ?? Date()
+        let waitedLongEnough = Date().timeIntervalSince(since) >= Self.maxSilenceWait
+
+        if waitedLongEnough {
+            await self.fireAccumulatedInsight(at: time)
+            return
+        }
+
+        self.pendingInsightTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.turnPause * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.fireAccumulatedInsight(at: time)
+        }
+    }
+
+    /// Produces one suggestion for everything accumulated since the last one.
+    private func fireAccumulatedInsight(at time: MeetingMediaTime) async {
+        let accumulated = self.turnsSinceLastInsight
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !accumulated.isEmpty else { return }
+
+        // Continue the open card while the topic is still running; start a new
+        // one once the conversation has clearly moved on.
+        let isRevision = self.openInsightID != nil
+            && (self.insights.last?.id == self.openInsightID)
+            && (self.insights.last?.anchor.seconds).map { time.seconds - $0 < Self.sameTopicWindow } ?? false
+
+        // A revision inherits everything already quoted, so the card shows the
+        // whole stretch of speech rather than only the newest fragment.
+        var quotes = isRevision ? self.openInsightQuotes : []
+        quotes.append(accumulated)
+        let quoted = quotes.joined(separator: " ")
+
+        // Hold until there is enough speech to reason about. Without this the
+        // card churns on a clause at a time.
+        guard quoted.count >= Self.minimumAccumulatedCharacters else {
+            DebugLogger.shared.log(
+                "MeetingCopilot: holding, \(quoted.count)/\(Self.minimumAccumulatedCharacters) chars accumulated",
+                level: .info,
+                source: "MeetingCopilot"
+            )
+            return
+        }
+        DebugLogger.shared.log(
+            "MeetingCopilot: firing insight over \(quoted.count) chars (revision: \(isRevision))",
+            level: .info,
+            source: "MeetingCopilot"
+        )
+
+        self.turnsSinceLastInsight.removeAll()
+        self.openInsightQuotes = quotes
+        self.lastInsightAt = Date()
+        self.accumulationStartedAt = nil
         await self.engine.recordAutomaticFire(at: time)
-        await self.produceInsight(.automaticInsight, anchor: time, quoted: text)
+
+        await self.produceInsight(
+            .automaticInsight,
+            anchor: time,
+            quoted: quoted,
+            revising: isRevision ? self.openInsightID : nil
+        )
     }
 
     func noteDroppedAudio(count: Int) {
         self.droppedAudioChunks = count
+    }
+
+    /// Records that no usable provider was resolved for this session.
+    ///
+    /// On-device inference needs Fluid Intelligence, which is not part of the
+    /// public build — so on this build `.local` can never resolve, and saying
+    /// so is more useful than an empty panel.
+    func reportProviderUnavailable(choice: CopilotProviderChoice) {
+        switch choice {
+        case .local:
+            self.unavailableReason = "On-device AI is not available in this build. Pick a cloud provider in Meeting Settings, or configure a local server such as Ollama or LM Studio under AI Enhancement."
+        case .cloud:
+            self.unavailableReason = "No cloud provider is configured. Set one up under AI Enhancement, then start the meeting again."
+        }
     }
 
     // MARK: - Actions
@@ -142,21 +261,40 @@ final class MeetingCopilotService: ObservableObject {
     private func produceInsight(
         _ request: CopilotPromptBuilder.Request,
         anchor: MeetingMediaTime,
-        quoted: String
+        quoted: String,
+        revising existingID: CopilotInsightID? = nil
     ) async {
         guard let profile = activeProfile else { return }
 
-        var insight = CopilotInsight(
-            anchor: anchor,
-            origin: request.origin ?? .automatic,
-            format: profile.insightFormat,
-            profileID: profile.id,
-            situation: CopilotPromptBuilder.situationLabel(for: request, language: self.language),
-            quotedContext: quoted,
-            state: .streaming
-        )
-        self.insights.append(insight)
+        var insight: CopilotInsight
+        if let existingID, let index = insights.firstIndex(where: { $0.id == existingID }) {
+            // Same topic still running: revise the card in place so the panel
+            // reads as one developing thought instead of a stack of fragments.
+            insight = self.insights[index]
+            insight.anchor = anchor
+            insight.quotedContext = quoted
+            insight.state = .streaming
+            insight.errorMessage = nil
+            self.insights[index] = insight
+        } else {
+            insight = CopilotInsight(
+                anchor: anchor,
+                origin: request.origin ?? .automatic,
+                format: profile.insightFormat,
+                profileID: profile.id,
+                situation: CopilotPromptBuilder.situationLabel(for: request, language: self.language),
+                quotedContext: quoted,
+                state: .streaming
+            )
+            self.insights.append(insight)
+            if request.origin == .automatic {
+                self.openInsightQuotes = [quoted]
+            }
+        }
         let insightID = insight.id
+        if request.origin == .automatic {
+            self.openInsightID = insightID
+        }
 
         self.isBusy = true
         defer { isBusy = false }
@@ -232,6 +370,7 @@ final class MeetingCopilotService: ObservableObject {
 
     /// Flushes pending work at the end of a session.
     func finish() async {
+        self.pendingInsightTask?.cancel()
         self.persistTask?.cancel()
         await self.engine.cancelInFlight()
         await self.persist()

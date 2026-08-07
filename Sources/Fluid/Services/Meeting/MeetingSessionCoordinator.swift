@@ -106,9 +106,13 @@ final class MeetingSessionCoordinator: ObservableObject {
     // Narrow accessors so the copilot lifecycle can live in its own file
     // (MeetingSessionCoordinator+Copilot.swift) instead of growing this one.
 
-    var captureController: any MeetingCaptureControlling { self.capture }
+    var captureController: any MeetingCaptureControlling {
+        self.capture
+    }
 
-    var liveTranscriptionTapValue: LiveTranscriptionTap? { self.liveTranscriptionTap }
+    var liveTranscriptionTapValue: LiveTranscriptionTap? {
+        self.liveTranscriptionTap
+    }
 
     func setCopilot(_ service: MeetingCopilotService?) {
         self.copilot = service
@@ -154,7 +158,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     var isProcessing: Bool {
-        if case .processing = self.state { return true }
+        if case .processing = self.state {
+            return true
+        }
         return false
     }
 
@@ -219,7 +225,16 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.captureGeneration = generation
         self.operationGeneration = generation
         let timebase = Self.makeTimebase()
-        var session = MeetingSession(configuration: configuration, timebase: timebase)
+        // The copilot is opt-in per session and fixed before Start: switching
+        // providers mid-meeting would send part of the conversation somewhere
+        // the user did not agree to (AD-005, `FR-026`).
+        let settings = SettingsStore.shared
+        var session = MeetingSession(
+            configuration: configuration,
+            timebase: timebase,
+            transcriptMode: settings.isCopilotEnabled ? .live : .offlineAfterStop,
+            copilotProviderChoice: settings.copilotProviderChoice
+        )
         self.activeSession = session
         self.state = .preparing(session.id)
         var captureStarted = false
@@ -228,6 +243,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         do {
             try await self.store.create(session)
             let sessionDirectory = try await self.store.sessionDirectory(for: session.id)
+            // Before capture.start: the engine hands the sink to its runtimes as
+            // it builds them, so installing it afterwards has no effect.
+            await self.startCopilot(for: session)
             captureStartAttempted = true
             let startResult = try await self.capture.start(
                 session: session,
@@ -248,13 +266,15 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             session.state = .recording
             session.updatedAt = Date()
-            self.startCopilot(for: session)
             self.activeSession = session
             self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
             self.state = .recording(session.id)
             try await self.store.save(session)
             return session
         } catch {
+            // The copilot was brought up before capture; a failed start must not
+            // leave it running against a session that never recorded.
+            await self.stopCopilot()
             if self.operationGeneration != generation {
                 if captureStarted {
                     _ = try? await self.capture.stop(sessionID: session.id)
@@ -301,7 +321,9 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     @discardableResult
     func stopAndTranscribe() async throws -> MeetingSession {
-        if let stopTask = self.stopTask { return try await stopTask.value }
+        if let stopTask = self.stopTask {
+            return try await stopTask.value
+        }
         guard let session = self.activeSession else { throw MeetingCoordinatorError.noActiveMeeting }
         guard self.interruptionTask == nil, self.terminationTask == nil else {
             throw MeetingCoordinatorError.activityInProgress

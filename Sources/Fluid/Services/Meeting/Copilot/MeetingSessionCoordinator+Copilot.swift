@@ -6,22 +6,17 @@ extension MeetingSessionCoordinator {
     /// Everything here is best-effort. A copilot that cannot start — no
     /// provider configured, no model on disk — leaves the meeting recording
     /// exactly as it would without this feature (`FR-002`, `FR-012`).
-    func startCopilot(for session: MeetingSession) {
+    func startCopilot(for session: MeetingSession) async {
         guard session.transcriptMode == .live else { return }
 
         let language = CopilotSeedLanguage.resolve(from: session.languageCode)
         let choice = session.copilotProviderChoice
         let route = CopilotProviderRoute.resolve(choice: choice)
 
-        guard route.isUsable else {
-            DebugLogger.shared.log(
-                "MeetingCopilot: no usable \(choice.rawValue) provider; running without copilot",
-                level: .info,
-                source: "MeetingCopilot"
-            )
-            return
-        }
-
+        // The service comes up even when the provider is unusable. Silently
+        // skipping it would mean the user enables the copilot, records, and sees
+        // nothing at all — a failure they cannot diagnose. The panel appears and
+        // explains instead (`T050`).
         let service = MeetingCopilotService(
             sessionID: session.id,
             language: language,
@@ -29,6 +24,16 @@ extension MeetingSessionCoordinator {
             route: route
         )
         self.setCopilot(service)
+
+        guard route.isUsable else {
+            service.reportProviderUnavailable(choice: choice)
+            DebugLogger.shared.log(
+                "MeetingCopilot: no usable \(choice.rawValue) provider; panel will explain",
+                level: .info,
+                source: "MeetingCopilot"
+            )
+            return
+        }
 
         let tap = LiveTranscriptionTap(
             delegate: CopilotLiveTranscriptionBridge(coordinator: self),
@@ -40,9 +45,9 @@ extension MeetingSessionCoordinator {
         )
         self.setLiveTranscriptionTap(tap)
 
-        Task { [capture = self.captureController] in
-            await capture.setLiveAudioSink(tap)
-        }
+        // Awaited, not fired into a Task: capture.start() is next, and it reads
+        // the sink as it builds its runtimes.
+        await self.captureController.setLiveAudioSink(tap)
         tap.start()
     }
 

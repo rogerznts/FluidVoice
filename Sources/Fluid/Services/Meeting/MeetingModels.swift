@@ -206,7 +206,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     }
 
     func validate() throws {
-        guard self.languageCode == "en" else {
+        guard MeetingSession.supportedLanguageCodes.contains(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.microphone.captureDeviceID.isEmpty else {
@@ -695,7 +695,7 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
         case let .unsupportedSchema(version):
             return "Unsupported meeting schema version \(version)."
         case .unsupportedLanguage:
-            return "Meeting transcription currently supports English only."
+            return "Meeting transcription supports English and Portuguese."
         case .missingMicrophone:
             return "A microphone must be selected."
         case .missingOnlineApplication:

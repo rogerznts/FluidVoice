@@ -253,7 +253,7 @@ extension MeetingCopilotProfileStore {
     private static func portugueseSeeds() -> [MeetingCopilotProfile] {
         [
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)technical-interview.pt",
+                id: "\(self.seedIDPrefix)technical-interview.pt",
                 name: "Entrevista Técnica",
                 insightPrompt: """
                 Você acompanha uma entrevista técnica em tempo real, ajudando quem está sendo entrevistado.
@@ -274,7 +274,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)job-interview.pt",
+                id: "\(self.seedIDPrefix)job-interview.pt",
                 name: "Entrevista de Emprego",
                 insightPrompt: """
                 Você acompanha uma entrevista de emprego em tempo real, ajudando quem está sendo entrevistado.
@@ -294,7 +294,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)sales.pt",
+                id: "\(self.seedIDPrefix)sales.pt",
                 name: "Vendas",
                 insightPrompt: """
                 Você acompanha uma call comercial em tempo real, ajudando quem está vendendo.
@@ -314,7 +314,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)lecture.pt",
+                id: "\(self.seedIDPrefix)lecture.pt",
                 name: "Aula",
                 insightPrompt: """
                 Você acompanha uma aula em tempo real, ajudando quem está assistindo.
@@ -333,7 +333,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)internal-meeting.pt",
+                id: "\(self.seedIDPrefix)internal-meeting.pt",
                 name: "Reunião Interna",
                 insightPrompt: """
                 Você acompanha uma reunião de trabalho em tempo real.
@@ -357,7 +357,7 @@ extension MeetingCopilotProfileStore {
     private static func englishSeeds() -> [MeetingCopilotProfile] {
         [
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)technical-interview.en",
+                id: "\(self.seedIDPrefix)technical-interview.en",
                 name: "Technical Interview",
                 insightPrompt: """
                 You are following a technical interview in real time, helping the person being interviewed.
@@ -378,7 +378,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)job-interview.en",
+                id: "\(self.seedIDPrefix)job-interview.en",
                 name: "Job Interview",
                 insightPrompt: """
                 You are following a job interview in real time, helping the person being interviewed.
@@ -398,7 +398,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)sales.en",
+                id: "\(self.seedIDPrefix)sales.en",
                 name: "Sales",
                 insightPrompt: """
                 You are following a sales call in real time, helping the person selling.
@@ -418,7 +418,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)lecture.en",
+                id: "\(self.seedIDPrefix)lecture.en",
                 name: "Lecture",
                 insightPrompt: """
                 You are following a lecture in real time, helping the person attending.
@@ -437,7 +437,7 @@ extension MeetingCopilotProfileStore {
                 isCustomized: false
             ),
             MeetingCopilotProfile(
-                id: "\(seedIDPrefix)internal-meeting.en",
+                id: "\(self.seedIDPrefix)internal-meeting.en",
                 name: "Internal Meeting",
                 insightPrompt: """
                 You are following a work meeting in real time.

@@ -13,7 +13,7 @@ nonisolated struct CopilotInsightTrigger: Sendable {
 
     /// Floor between automatic insights, so a fast conversation cannot spin the
     /// provider continuously (`FR-011`).
-    var minimumInterval: TimeInterval = 8
+    var minimumInterval: TimeInterval = 4
 
     /// - Parameters:
     ///   - lastFiredAt: media time of the previous automatic insight.

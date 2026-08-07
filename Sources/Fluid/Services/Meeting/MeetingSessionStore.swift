@@ -20,7 +20,7 @@ final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
 actor MeetingSessionStore: MeetingSessionStoring {
     static let shared = MeetingSessionStore()
 
-    private struct SessionIndex: Codable {
+    struct SessionIndex: Codable {
         static let currentSchemaVersion = 1
 
         var schemaVersion: Int
@@ -242,7 +242,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         )
     }
 
-    private func readIndex() throws -> SessionIndex {
+    func readIndex() throws -> SessionIndex {
         let url = self.rootDirectory.appendingPathComponent("index.json", isDirectory: false)
         guard self.fileSystem.manager.fileExists(atPath: url.path) else {
             return SessionIndex(
@@ -264,6 +264,19 @@ actor MeetingSessionStore: MeetingSessionStoring {
         if !index.sessionIDs.contains(id) {
             index.sessionIDs.append(id)
         }
+        index.updatedAt = Date()
+        let data = try self.encoder.encode(index)
+        try self.atomicPrivateWrite(
+            data,
+            to: self.rootDirectory.appendingPathComponent("index.json", isDirectory: false)
+        )
+    }
+
+    /// Drops an id from the index. Internal so session deletion can live in
+    /// MeetingSessionStore+Copilot.swift alongside the artifact cleanup.
+    func removeFromIndex(_ id: MeetingSessionID) throws {
+        guard var index = try? self.readIndex() else { return }
+        index.sessionIDs.removeAll { $0 == id }
         index.updatedAt = Date()
         let data = try self.encoder.encode(index)
         try self.atomicPrivateWrite(

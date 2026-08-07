@@ -29,6 +29,9 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var selectedApplicationID: String?
     var selectedMicrophoneID: String?
     var microphoneRole: MeetingMicrophoneRole = .unknown
+    /// Meeting language. Drives ASR and the copilot's prompt language
+    /// (`DEC-COP-001`, `FR-000`).
+    var languageCode: String = "en"
 
     init(settings: SettingsStore = .shared) {
         let defaults = settings.meetingRecordingDefaults
@@ -37,6 +40,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.selectedApplicationID = nil
         self.selectedMicrophoneID = defaults.microphoneCaptureDeviceID
         self.microphoneRole = defaults.microphoneRole
+        self.languageCode = settings.meetingLanguageCode
     }
 
     static func defaultTitle(now: Date = Date()) -> String {
@@ -81,6 +85,7 @@ struct MeetingSetupReadiness: Equatable {
 struct MeetingTranscriptionView: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var asrService: ASRService
+    @ObservedObject private var settings = SettingsStore.shared
     let onOpenVoiceEngine: () -> Void
 
     @Environment(\.theme) private var theme
@@ -142,22 +147,32 @@ struct MeetingTranscriptionView: View {
             Divider()
 
             HStack(spacing: 0) {
-                MeetingTranscriptionCanvas(
-                    setupDraft: self.$setupDraft,
-                    state: self.canvasState,
-                    applications: self.applications,
-                    microphones: self.microphones,
-                    readiness: self.readiness,
-                    errorMessage: self.actionErrorMessage,
-                    onRefreshSources: self.refreshSourcesFromUserAction,
-                    onStart: self.startRecording,
-                    onStop: self.stopAndTranscribe,
-                    onRetry: self.retryProcessing,
-                    onRevealAudio: self.revealCapturedAudio,
-                    onCopyTranscript: self.copyTranscript,
-                    onOpenMeetingSettings: self.openMeetingSettings,
-                    isRetrying: self.isRetrying
-                )
+                VStack(spacing: 0) {
+                    if self.settings.copilotPanelPlacement == .above, let copilot = coordinator.copilot {
+                        CopilotPanelView(copilot: copilot)
+                    }
+
+                    MeetingTranscriptionCanvas(
+                        setupDraft: self.$setupDraft,
+                        state: self.canvasState,
+                        applications: self.applications,
+                        microphones: self.microphones,
+                        readiness: self.readiness,
+                        errorMessage: self.actionErrorMessage,
+                        onRefreshSources: self.refreshSourcesFromUserAction,
+                        onStart: self.startRecording,
+                        onStop: self.stopAndTranscribe,
+                        onRetry: self.retryProcessing,
+                        onRevealAudio: self.revealCapturedAudio,
+                        onCopyTranscript: self.copyTranscript,
+                        onOpenMeetingSettings: self.openMeetingSettings,
+                        isRetrying: self.isRetrying
+                    )
+
+                    if self.settings.copilotPanelPlacement == .below, let copilot = coordinator.copilot {
+                        CopilotPanelView(copilot: copilot)
+                    }
+                }
 
                 if self.isMeetingHistoryVisible {
                     Divider()
@@ -165,7 +180,8 @@ struct MeetingTranscriptionView: View {
                         sessions: self.meetingHistory,
                         selectedSessionID: self.$selectedHistorySessionID,
                         errorMessage: self.meetingHistoryError,
-                        onRefresh: { Task { await self.loadMeetingHistory() } }
+                        onRefresh: { Task { await self.loadMeetingHistory() } },
+                        onDelete: { session in Task { await self.deleteMeeting(session) } }
                     )
                     .frame(width: 290)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -477,12 +493,15 @@ struct MeetingTranscriptionView: View {
         microphone.role = self.setupDraft.mode == .onlineCall ? self.setupDraft.microphoneRole : .unknown
 
         let applicationOption = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
-        if self.setupDraft.mode == .onlineCall, applicationOption == nil { return nil }
+        if self.setupDraft.mode == .onlineCall, applicationOption == nil {
+            return nil
+        }
         let application = self.setupDraft.mode == .onlineCall ? applicationOption?.identity : nil
 
         return MeetingCaptureConfiguration(
             mode: self.setupDraft.mode,
             title: title,
+            languageCode: self.setupDraft.languageCode,
             platform: application.map {
                 MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName)
             },
@@ -571,6 +590,27 @@ struct MeetingTranscriptionView: View {
         Task { await self.refreshSources(requestPermissions: false) }
     }
 
+    /// Removes a meeting from disk and from the list.
+    ///
+    /// Refuses while that meeting is the active one: deleting a session mid-flight
+    /// would pull the directory out from under capture (`STATE-005`).
+    private func deleteMeeting(_ session: MeetingSession) async {
+        guard self.coordinator.activeSession?.id != session.id else {
+            self.actionErrorMessage = "Stop the meeting before deleting it."
+            return
+        }
+
+        do {
+            try await MeetingSessionStore.shared.deleteSession(id: session.id)
+            if self.selectedHistorySessionID == session.id {
+                self.selectedHistorySessionID = nil
+            }
+            await self.loadMeetingHistory()
+        } catch {
+            self.meetingHistoryError = "Could not delete the meeting: \(error.localizedDescription)"
+        }
+    }
+
     private func saveMeetingSettings() {
         guard let microphone = self.microphones.first(where: { $0.id == self.setupDraft.selectedMicrophoneID }) else {
             self.actionErrorMessage = "Choose an available microphone before saving."
@@ -592,6 +632,7 @@ struct MeetingTranscriptionView: View {
             microphoneCoreAudioUID: microphone.identity.coreAudioUID,
             microphoneRole: self.setupDraft.microphoneRole
         )
+        settings.meetingLanguageCode = self.setupDraft.languageCode
 
         self.setupDraftBeforeEditing = self.setupDraft
         self.actionErrorMessage = nil
@@ -862,8 +903,12 @@ private struct MeetingHeaderIconButton: View {
 private struct MeetingHistoryInspector: View {
     let sessions: [MeetingSession]
     @Binding var selectedSessionID: MeetingSessionID?
+    @State private var pendingDeletion: MeetingSession?
     let errorMessage: String?
     let onRefresh: () -> Void
+    /// Deleting a meeting is destructive and irreversible, so it is confirmed
+    /// before it runs.
+    let onDelete: (MeetingSession) -> Void
 
     @Environment(\.theme) private var theme
     @State private var searchText = ""
@@ -924,6 +969,13 @@ private struct MeetingHistoryInspector: View {
                     ForEach(self.filteredSessions) { session in
                         MeetingHistoryRow(session: session)
                             .tag(session.id)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    self.pendingDeletion = session
+                                } label: {
+                                    Label("Delete Meeting…", systemImage: "trash")
+                                }
+                            }
                     }
                 }
                 .listStyle(.sidebar)
@@ -931,6 +983,26 @@ private struct MeetingHistoryInspector: View {
             }
         }
         .background(self.theme.palette.sidebarBackground)
+        .confirmationDialog(
+            "Delete this meeting?",
+            isPresented: Binding(
+                get: { self.pendingDeletion != nil },
+                set: {
+                    if !$0 {
+                        self.pendingDeletion = nil
+                    }
+                }
+            ),
+            presenting: self.pendingDeletion
+        ) { session in
+            Button("Delete Meeting", role: .destructive) {
+                self.onDelete(session)
+                self.pendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { self.pendingDeletion = nil }
+        } message: { session in
+            Text("\(session.title) — its recording, transcript, and copilot notes are removed from this Mac. This cannot be undone.")
+        }
     }
 }
 
@@ -1031,6 +1103,7 @@ private struct MeetingRecordingSettingsSheet: View {
     let onCancel: () -> Void
     let onSave: () -> Void
 
+    @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
 
     private var canSave: Bool {
@@ -1147,10 +1220,17 @@ private struct MeetingRecordingSettingsSheet: View {
                             }
 
                             Divider()
-                            MeetingAdaptiveSetupRow(title: "Language") {
-                                Text("English")
-                                    .font(self.theme.typography.bodyStrong)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            MeetingAdaptiveSetupRow(
+                                title: "Language",
+                                detail: "Sets both transcription and the copilot's language."
+                            ) {
+                                Picker("Language", selection: self.$draft.languageCode) {
+                                    Text("English").tag("en")
+                                    Text("Português").tag("pt")
+                                }
+                                .labelsHidden()
+                                .frame(width: 320, alignment: .trailing)
+                                .accessibilityLabel("Meeting language")
                             }
 
                             Divider()
@@ -1158,6 +1238,55 @@ private struct MeetingRecordingSettingsSheet: View {
                                 Text(self.separationDescription)
                                     .font(self.theme.typography.bodyStrong)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            Divider()
+                            MeetingAdaptiveSetupRow(
+                                title: "Copilot",
+                                detail: "Live suggestions during the meeting. Transcription and recording are unaffected either way."
+                            ) {
+                                Toggle("Copilot", isOn: self.$settings.isCopilotEnabled)
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                                    .accessibilityLabel("Enable meeting copilot")
+                            }
+
+                            if self.settings.isCopilotEnabled {
+                                Divider()
+                                MeetingAdaptiveSetupRow(
+                                    title: "Copilot AI",
+                                    detail: self.settings.copilotProviderChoice == .cloud
+                                        ? "The meeting transcript, including other people's speech, is sent to your configured cloud provider."
+                                        : "Insights are generated on this Mac. Nothing leaves it."
+                                ) {
+                                    Picker("Copilot AI", selection: self.$settings.copilotProviderChoice) {
+                                        Text("On device").tag(CopilotProviderChoice.local)
+                                        Text("Cloud provider").tag(CopilotProviderChoice.cloud)
+                                    }
+                                    .labelsHidden()
+                                    .frame(width: 320, alignment: .trailing)
+                                    .accessibilityLabel("Copilot AI provider")
+                                }
+
+                                // Better to learn this before recording than
+                                // after (`T050`).
+                                if !CopilotProviderRoute.resolve(
+                                    choice: self.settings.copilotProviderChoice
+                                ).isUsable {
+                                    MeetingAdaptiveSetupRow(title: "") {
+                                        Label(
+                                            self.settings.copilotProviderChoice == .local
+                                                ? "On-device AI is not available in this build. Pick a cloud provider, or set up Ollama or LM Studio under AI Enhancement."
+                                                : "No cloud provider is configured yet. Set one up under AI Enhancement.",
+                                            systemImage: "exclamationmark.triangle"
+                                        )
+                                        .font(self.theme.typography.caption)
+                                        .foregroundStyle(self.theme.palette.warning)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
                             }
                         }
                     }
@@ -1243,6 +1372,7 @@ private struct MeetingSetupCanvas: View {
     let onStart: () -> Void
     let onOpenMeetingSettings: () -> Void
 
+    @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
 
     private var requiredSystemsReady: Bool {
@@ -1620,20 +1750,32 @@ private struct MeetingProcessingCanvas: View {
     }
 
     private func icon(for stage: MeetingProcessingStage, index: Int) -> String {
-        if self.stage == .completed || index < self.activeIndex { return "checkmark.circle.fill" }
-        if stage == self.stage { return "circle.dotted" }
+        if self.stage == .completed || index < self.activeIndex {
+            return "checkmark.circle.fill"
+        }
+        if stage == self.stage {
+            return "circle.dotted"
+        }
         return "circle"
     }
 
     private func color(for stage: MeetingProcessingStage, index: Int) -> Color {
-        if self.stage == .completed || index < self.activeIndex { return self.theme.palette.success }
-        if stage == self.stage { return self.theme.palette.accent }
+        if self.stage == .completed || index < self.activeIndex {
+            return self.theme.palette.success
+        }
+        if stage == self.stage {
+            return self.theme.palette.accent
+        }
         return self.theme.palette.tertiaryText
     }
 
     private func accessibilityStatus(for stage: MeetingProcessingStage, index: Int) -> String {
-        if self.stage == .completed || index < self.activeIndex { return "complete" }
-        if stage == self.stage { return "in progress" }
+        if self.stage == .completed || index < self.activeIndex {
+            return "complete"
+        }
+        if stage == self.stage {
+            return "in progress"
+        }
         return "waiting"
     }
 
@@ -2014,14 +2156,29 @@ private struct MeetingTranscriptSegmentRow: View {
                 .frame(width: Self.timestampColumnWidth, alignment: .leading)
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                Text(self.speakerName)
-                    .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    Text(self.speakerName)
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(self.theme.palette.accent)
+
+                    // Provisional text is live output that the offline pass will
+                    // replace. Labelled in words, not by colour alone
+                    // (`FR-004`, `A11Y-004`).
+                    if self.segment.status == .provisional {
+                        Text("Live")
+                            .font(self.theme.typography.badge)
+                            .foregroundStyle(self.theme.palette.tertiaryText)
+                            .padding(.horizontal, self.theme.metrics.spacing.sm)
+                            .padding(.vertical, 1)
+                            .background(self.theme.palette.contentBackground, in: Capsule())
+                    }
+                }
                 Text(self.segment.text)
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.primaryText)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .opacity(self.segment.status == .provisional ? 0.75 : 1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
