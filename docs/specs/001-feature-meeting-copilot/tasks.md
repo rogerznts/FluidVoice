@@ -283,19 +283,46 @@ Testes novos: `CopilotTurnAccumulatorTests` (10) e `CopilotNoteExtractorTests` (
 
 ## Fase 7: Privacidade, robustez e prova
 
-- [ ] **T046** Implementar seleção de provedor por sessão, fixada antes do Start, com padrão **local** (`FR-025`, AD-005).
-- [ ] **T047** Implementar opt-in explícito para provedor em nuvem, com aviso claro de que a fala de terceiros sai da máquina (`FR-026`).
-- [ ] **T048** Exibir indicador persistente do destino dos dados enquanto a nuvem estiver ativa (`FR-027`).
-- [ ] **T049** Auditar analytics, logs e diagnósticos: nenhum conteúdo de reunião pode aparecer (`FR-028`, `SC-007`, `TEST-PRIV-001`, R-06).
-- [ ] **T050** Verificação de capacidade do modelo local antes do Start, com aviso honesto em vez de falha cartão a cartão (R-08).
-- [ ] **T051** Degradação em Intel: insights sobre transcrição sem rótulo de locutor, com a limitação declarada na interface (`DEC-009`).
+- [x] **T046** Implementar seleção de provedor por sessão, fixada antes do Start, com padrão **local** (`FR-025`, AD-005).
+- [x] **T047** Implementar opt-in explícito para provedor em nuvem, com aviso claro de que a fala de terceiros sai da máquina (`FR-026`).
+- [x] **T048** Exibir indicador persistente do destino dos dados enquanto a nuvem estiver ativa (`FR-027`).
+- [x] **T049** Auditar analytics, logs e diagnósticos: nenhum conteúdo de reunião pode aparecer (`FR-028`, `SC-007`, `TEST-PRIV-001`, R-06).
+
+  **A auditoria encontrou um vazamento real, introduzido por mim.** Ao diagnosticar por que o copiloto não disparava na F4, adicionei `LiveTranscriptionTap: \(kind) → \(text.prefix(40))…` e não removi. Resultado: **229 linhas de fala de reunião** gravadas em `~/Library/Logs/Fluid/Fluid.log`.
+
+  Corrigido em três frentes:
+
+  - O log passou a registrar **contagem de caracteres**, nunca as palavras
+  - As 229 linhas já escritas foram removidas do arquivo em disco
+  - `CopilotPrivacyTests` lê o próprio código-fonte e falha se qualquer chamada de log interpolar `text`, `quoted`, `body`, `response`, `question` ou usar `.prefix(` — revisão de diff não pegou, um teste que lê a fonte pega
+
+  Auditoria de analytics: o copiloto não emite eventos, e o evento herdado `meeting_transcription_completed` envia apenas extensão de arquivo e faixas de duração. Sem conteúdo.
+- [x] **T050** Verificação de capacidade do modelo local antes do Start, com aviso honesto em vez de falha cartão a cartão (R-08).
+- [x] **T051** Degradação em Intel: insights sobre transcrição sem rótulo de locutor, com a limitação declarada na interface (`DEC-009`).
 - [ ] **T052** Medir a latência do primeiro PCM do ditado contra a baseline atual e provar impacto zero (`FR-030`, `SC-004`).
-- [ ] **T053** Matriz de falhas: provider fora do ar, chave inválida, timeout, cancelamento no Stop, encerramento forçado durante insight em voo (`SC-005`).
+- [x] **T053** Matriz de falhas: provider fora do ar, chave inválida, timeout, cancelamento no Stop, encerramento forçado durante insight em voo (`SC-005`).
 - [ ] **T054** Sessão de 60 minutos com memória limitada e sem perda de segmentos finalizados (`SC-003`).
-- [ ] **T055** SwiftFormat e SwiftLint estrito em toda a superfície nova (`TEST-REPO-001`).
-- [ ] **T056** Validação no app instalado, em reunião real, em pt-BR e en (`TEST-REPO-003`).
+- [x] **T055** SwiftFormat e SwiftLint estrito em toda a superfície nova (`TEST-REPO-001`).
+- [x] **T056** Validação no app instalado, em reunião real, em pt-BR e en (`TEST-REPO-003`).
 
 **Checkpoint F7**: `SC-001` a `SC-008` verificados; feature pronta para gate de QA.
+
+### Registro de execução F7 — 2026-08-07
+
+Boa parte da fase já havia sido feita durante as correções das fases anteriores, não por planejamento: T046 (provider por sessão), T047 (opt-in de nuvem), T048 (indicador persistente) e T050 (aviso antes do Start) nasceram de bugs encontrados no uso.
+
+Entregue nesta rodada:
+
+- **T049 — auditoria.** Encontrou vazamento real. Detalhado na própria tarefa.
+- **T051 — Intel.** O copiloto funciona sem diarização, porque a atribuição de locutor vem da trilha de origem, não do diarizador. A tela de setup passou a declarar isso.
+- **T053 — matriz de falhas.** `CopilotFailureMatrixTests`, cobrindo rota inutilizável, consumidor lento, arbitragem sob processamento offline, integridade da transcrição em falha, e artefatos órfãos.
+
+**Não entregue, e precisam de execução real:**
+
+- **T052** — medir a latência do primeiro PCM do ditado contra a baseline (`SC-004`). Verificado apenas por observação: o ditado funcionou sem atraso perceptível. Não é medição.
+- **T054** — sessão de 60 minutos com memória limitada (`SC-003`). O teste de 1200 segmentos exercitou a renderização, não uma gravação longa de verdade.
+
+**Lacuna que atravessa a spec inteira:** `xcodebuild test` nunca executou neste ambiente, e o workflow de CI só dispara em push ou PR para `main` — a branch de feature não aciona nada. Os **111 testes** escritos estão compilados e não executados. Decisão registrada do usuário em 2026-08-07: seguir sem rodá-los.
 
 ---
 

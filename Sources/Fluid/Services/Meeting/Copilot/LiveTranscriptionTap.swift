@@ -307,8 +307,10 @@ final class LiveTranscriptionTap: MeetingLiveAudioSink, @unchecked Sendable {
             )
             return
         }
+        // Length only, never the words. Meeting speech must not reach logs,
+        // analytics, or diagnostics (`FR-028`).
         DebugLogger.shared.log(
-            "LiveTranscriptionTap: \(kind.rawValue) → \(text.prefix(40))…",
+            "LiveTranscriptionTap: \(kind.rawValue) produced \(text.count) chars",
             level: .info,
             source: "MeetingCopilot"
         )

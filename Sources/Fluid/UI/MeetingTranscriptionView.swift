@@ -1292,7 +1292,9 @@ private struct MeetingRecordingSettingsSheet: View {
                             Divider()
                             MeetingAdaptiveSetupRow(
                                 title: "Copilot",
-                                detail: "Live suggestions during the meeting. Transcription and recording are unaffected either way."
+                                detail: CPUArchitecture.isAppleSilicon
+                                    ? "Live suggestions during the meeting. Transcription and recording are unaffected either way."
+                                    : "Live suggestions during the meeting. On Intel there is no speaker separation, so suggestions work from an unlabelled transcript."
                             ) {
                                 Toggle("Copilot", isOn: self.$settings.isCopilotEnabled)
                                     .labelsHidden()
